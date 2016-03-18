@@ -6,6 +6,7 @@ import Data.Tree (flatten)
 import Data.Char (ord, chr)
 import Data.Set as Set (Set, insert, member, empty, union, toList, singleton, fromList)
 import Debug.Trace
+import Data.Fixed
 
 data XlValue = XlNumber Double
              | XlString String
@@ -68,9 +69,20 @@ toAbs base@(XlRC br bc) cell@(XlRC cr cc) = XlRC (toAbsAddr br cr) (toAbsAddr bc
       toAbsAddr (XlAbs aa) (XlRel rr) = XlAbs (aa + rr)
       toAbsAddr base@(XlRel _) _ = error ("base in toAbs must be absolute, got " ++ show base) 
 
+-- Converts Excel addresses in "A1" format to internal RC format.
+-- Supports only rows A-Z, and absolute addresses.
+toRC :: String -> XlRC
+toRC (l:num) = XlRC (XlAbs ((ord l) - 65)) (XlAbs ((read num) - 1))
+
 evalArg :: Set XlRC -> XlCells -> XlValues -> XlRC -> XlArg -> (XlArgValue, XlValues)
 evalArg visiting cells values rc (XlFml formula) = (XlVal newValue, newValues) where (newValue, newValues) = evalFormula (Set.insert rc visiting) cells values rc formula
 evalArg visiting cells values rc (XlRng from to) = (XlMtx [[XlNumber 0]], values) -- TODO
+
+toString :: Double -> String
+toString n =
+   if (toInteger n) /= n
+   then show n
+   else show (toInteger n)
 
 evalFormula :: Set XlRC -> XlCells -> XlValues -> XlRC -> XlFormula -> (XlValue, XlValues)
 evalFormula _        _     values rc (XlLit value) = (value, Map.insert rc value values)
@@ -98,6 +110,9 @@ evalFormula visiting cells values rc (XlFun "+" [a, b]) =
       doSum (XlVal e@(XlError _)) _                     = e
       doSum _                     (XlVal e@(XlError _)) = e
       doSum (XlVal (XlNumber na)) (XlVal (XlNumber nb)) = XlNumber (na + nb)
+      doSum (XlVal (XlString sa)) (XlVal (XlNumber nb)) = XlString (sa ++ (toString nb))
+      doSum (XlVal (XlNumber na)) (XlVal (XlString sb)) = XlString ((toString na) ++ sb)
+      doSum (XlVal (XlString sa)) (XlVal (XlString sb)) = XlString (sa ++ sb)
       doSum _                    _                      = XlError "#VALUE!"
       val = doSum va vb
    in
@@ -114,6 +129,18 @@ evalFormula visiting cells values rc (XlFun "IF" [i, t, e]) =
             XlVal (XlNumber 0)    -> (ve, valuese)
             XlVal _               -> (vt, valuest)
             _                     -> (XlVal (XlError "#VALUE!"), valuesi)
+   in
+      (vr, Map.insert rc vr valuesr)
+
+evalFormula visiting cells values rc (XlFun "INDIRECT" [addr]) =
+   let
+      (va, valuesa) = evalArg visiting cells values rc addr
+      (XlVal vr, valuesr) = 
+         case va of
+            XlVal (XlString computed) ->
+               evalArg visiting cells valuesa rc (XlFml (XlRef (toRC computed)))
+            _ ->
+               (XlVal (XlError "#VALUE!"), valuesa)
    in
       (vr, Map.insert rc vr valuesr)
 
@@ -141,16 +168,26 @@ run sheet@(XlWorksheet cells) events =
  
    in foldl' runEvent (XlEnv cells Map.empty) events
 
--- Converts Excel addresses in "A1" format to internal RC format.
--- Supports only rows A-Z, and absolute addresses.
-toRC :: String -> XlRC
-toRC (l:num) = XlRC (XlAbs ((ord l) - 65)) (XlAbs ((read num) - 1))
+str :: String -> XlFormula
+str s = XlLit (XlString s)
+
+num :: Double -> XlFormula
+num n = XlLit (XlNumber n)
+
+cell :: String -> XlFormula
+cell a1 = XlRef (toRC a1)
+
+fun :: String -> [XlFormula] -> XlFormula
+fun name args = XlFun name (map XlFml args)
 
 main :: IO ()
 main = print $ run (XlWorksheet Map.empty)
                   [
-                   (XlEvent (toRC "A1") (XlCell (XlLit (XlNumber 15)))),
-                   (XlEvent (toRC "B1") (XlCell (XlLit (XlNumber 0)))),
-                   (XlEvent (toRC "A2") (XlCell (XlFun "+" [XlFml (XlRef (toRC "A1")), XlFml (XlRef (toRC "B1"))]))),
-                   (XlEvent (toRC "B1") (XlCell (XlRef (toRC "A1"))))
+                   (XlEvent (toRC "A1") (XlCell (num 15))),
+                   (XlEvent (toRC "B1") (XlCell (num 0))),
+                   (XlEvent (toRC "A2") (XlCell (fun "+" [cell "A1", cell "B1"]))),
+                   (XlEvent (toRC "B1") (XlCell (cell "A1"))),
+                   (XlEvent (toRC "C1") (XlCell (str "B"))),
+                   (XlEvent (toRC "C2") (XlCell (num 1))),
+                   (XlEvent (toRC "B2") (XlCell (fun "INDIRECT" [fun "+" [cell "C1", cell "C2"]])))
                   ]
