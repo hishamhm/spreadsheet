@@ -76,13 +76,39 @@ toRC (l:num) = XlRC (XlAbs ((ord l) - 65)) (XlAbs ((read num) - 1))
 
 evalArg :: Set XlRC -> XlCells -> XlValues -> XlRC -> XlArg -> (XlArgValue, XlValues)
 evalArg visiting cells values rc (XlFml formula) = (XlVal newValue, newValues) where (newValue, newValues) = evalFormula (Set.insert rc visiting) cells values rc formula
-evalArg visiting cells values rc (XlRng from to) = (XlMtx [[XlNumber 0]], values) -- TODO
+evalArg visiting cells values rc (XlRng from to) = 
+   let
+      (XlRC (XlAbs fromR) (XlAbs fromC)) = toAbs rc from
+      (XlRC (XlAbs toR)   (XlAbs toC))   = toAbs rc to
+      minR = min fromR toR
+      maxR = max fromR toR
+      minC = min fromC toC
+      maxC = max fromC toC
+      (mtx, newValues) =
+         foldl' handleRow ([], values) [minR..maxR]
+            where
+               handleRow :: ([[XlValue]], XlValues) -> Int -> ([[XlValue]], XlValues)
+               handleRow (curMtx, curValues) r =
+                  let
+                     (newRow, newValues) =
+                        foldl' handleValue ([], curValues) [minC..maxC]
+                           where
+                              handleValue (curRow, curRowValues) c =
+                                 let
+                                    curRc = XlRC (XlAbs r) (XlAbs c)
+                                    (newValue, newRowValues) = evalFormula visiting cells curRowValues curRc (XlRef curRc)
+                                 in
+                                    (curRow ++ [newValue], newRowValues)
+                  in
+                     (curMtx ++ [newRow], newValues)
+   in
+      (XlMtx mtx, newValues)
 
 toString :: Double -> String
 toString n =
-   if (toInteger n) /= n
-   then show n
-   else show (toInteger n)
+      if fromIntegral (floor n) /= n
+      then show n
+      else show (floor n)
 
 evalFormula :: Set XlRC -> XlCells -> XlValues -> XlRC -> XlFormula -> (XlValue, XlValues)
 evalFormula _        _     values rc (XlLit value) = (value, Map.insert rc value values)
@@ -113,7 +139,7 @@ evalFormula visiting cells values rc (XlFun "+" [a, b]) =
       doSum (XlVal (XlString sa)) (XlVal (XlNumber nb)) = XlString (sa ++ (toString nb))
       doSum (XlVal (XlNumber na)) (XlVal (XlString sb)) = XlString ((toString na) ++ sb)
       doSum (XlVal (XlString sa)) (XlVal (XlString sb)) = XlString (sa ++ sb)
-      doSum _                    _                      = XlError "#VALUE!"
+      doSum _                     _                     = XlError "#VALUE!"
       val = doSum va vb
    in
       (val, Map.insert rc val values'')
@@ -143,6 +169,25 @@ evalFormula visiting cells values rc (XlFun "INDIRECT" [addr]) =
                (XlVal (XlError "#VALUE!"), valuesa)
    in
       (vr, Map.insert rc vr valuesr)
+
+evalFormula visiting cells values rc (XlFun "SUM" [rng]) =
+   let
+      (vrng, valuesrng) = evalArg visiting cells values rc rng
+      sumValue e@(XlError _) _            = e
+      sumValue _ e@(XlError _)            = e
+      sumValue s@(XlString _) v           = v
+      sumValue v s@(XlString _)           = v
+      sumValue (XlBoolean b) (XlNumber n) = XlNumber ((if b == True then 1 else 0) + n)
+      sumValue (XlNumber n) (XlBoolean b) = XlNumber ((if b == True then 1 else 0) + n)
+      sumValue (XlNumber a) (XlNumber b)  = XlNumber (a + b)
+      s = 
+         case vrng of
+            XlMtx mtx ->
+               foldl' (foldl' sumValue) (XlNumber 0) mtx
+            _ ->
+               XlError "#VALUE!"
+   in
+      (s, Map.insert rc s valuesrng)
 
 calcCell :: Set XlRC -> XlCells -> XlValues -> XlRC -> XlCell -> XlValues
 calcCell visiting cells values rc (XlCell formula) = newValues where (_, newValues) = evalFormula visiting cells values rc formula
@@ -189,5 +234,8 @@ main = print $ run (XlWorksheet Map.empty)
                    (XlEvent (toRC "B1") (XlCell (cell "A1"))),
                    (XlEvent (toRC "C1") (XlCell (str "B"))),
                    (XlEvent (toRC "C2") (XlCell (num 1))),
-                   (XlEvent (toRC "B2") (XlCell (fun "INDIRECT" [fun "+" [cell "C1", cell "C2"]])))
+                   (XlEvent (toRC "B2") (XlCell (fun "INDIRECT" [fun "+" [cell "C1", cell "C2"]]))),
+                   (XlEvent (toRC "D1") (XlCell (XlFun "SUM" [XlRng (toRC "A1") (toRC "B2")]) )),
+                   (XlEvent (toRC "E1") (XlCell (XlFun "SUM" [XlRng (toRC "B1") (toRC "B2")]) )),
+                   (XlEvent (toRC "F1") (XlCell (XlFun "SUM" [XlRng (toRC "D1") (toRC "E1")]) ))
                   ]
