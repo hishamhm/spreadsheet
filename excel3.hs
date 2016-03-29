@@ -1,13 +1,12 @@
 
-import Data.Map.Strict as Map (Map, empty, elems, mapWithKey, foldrWithKey, member, insert, lookup, (!), toList)
-import Data.Graph as Graph (Graph, Vertex, graphFromEdges, transposeG, reachable)
+import Data.Map.Strict as Map (Map, empty, elems, mapWithKey, foldrWithKey, member, insert, lookup, toList, (!))
 import Data.List (foldl')
 import Data.Tree (flatten)
 import Data.Char (ord, chr)
 import Data.Set as Set (Set, insert, member, empty, union, toList, singleton, fromList)
 import Debug.Trace
 import Data.Fixed
-import Text.PrettyPrint.Boxes as Box (render, hsep, vcat, text)
+import Text.PrettyPrint.Boxes as Box (render, hcat, vcat, text)
 import Text.PrettyPrint.Boxes as Alignment (left, right)
 
 data XlValue = XlNumber Double
@@ -18,7 +17,7 @@ data XlValue = XlNumber Double
    deriving Eq
 
 instance Show XlValue where
-   show (XlNumber d)  = show d
+   show (XlNumber d)  = toString d
    show (XlString s)  = show s
    show (XlBoolean b) = show b
    show (XlError e)   = show e
@@ -64,11 +63,10 @@ type XlValues = Map.Map XlRC XlValue
 
 data XlEnv = XlEnv XlCells XlValues
 
-lpad m xs = reverse $ take m $ reverse $ (take m $ repeat ' ') ++ (take m xs)
-
 instance Show XlEnv where
-   show (XlEnv cells values) = (Box.render $ Box.vcat Alignment.left $ map Box.text $ (map show (Map.toList cells))) ++ "\n\n" ++ (Box.render $ Box.hsep 1 Alignment.left $ numbers : map doRow [0..25])
+   show (XlEnv cells values) = (Box.render $ Box.vcat Alignment.left $ map Box.text $ (map show (Map.toList cells))) ++ "\n\n" ++ (Box.render $ Box.hcat Alignment.left $ numbers : map doRow [0..25])
       where
+         lpad m xs = reverse $ take m $ reverse $ (take m $ repeat ' ') ++ (take m xs)
          numbers = Box.vcat Alignment.right $ map Box.text $ " " : map show [1..26]
          doRow r = Box.vcat Alignment.left $ Box.text ['|', chr (r + 65)] : map doColumn [0..25]
             where
@@ -78,7 +76,7 @@ instance Show XlEnv where
                      val = Map.lookup rc values
                   in
                      case val of
-                        Just (XlNumber n)  -> Box.text ('|' : (lpad 8 (show n)))
+                        Just (XlNumber n)  -> Box.text ('|' : (lpad 11 (toString n)))
                         Just v  -> Box.text ('|' : show v)
                         Nothing -> Box.text "|"
                
