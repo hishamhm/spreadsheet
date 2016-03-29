@@ -1,5 +1,5 @@
 
-import Data.Map.Strict as Map (Map, empty, elems, mapWithKey, foldrWithKey, member, insert, lookup)
+import Data.Map.Strict as Map (Map, empty, elems, mapWithKey, foldrWithKey, member, insert, lookup, toList)
 import Data.Graph as Graph (Graph, Vertex, graphFromEdges, transposeG, reachable)
 import Data.List (foldl')
 import Data.Tree (flatten)
@@ -7,13 +7,22 @@ import Data.Char (ord, chr)
 import Data.Set as Set (Set, insert, member, empty, union, toList, singleton, fromList)
 import Debug.Trace
 import Data.Fixed
+import Text.PrettyPrint.Boxes as Box (render, hcat, vcat, text)
+import Text.PrettyPrint.Boxes as Alignment (left, right)
 
 data XlValue = XlNumber Double
              | XlString String
              | XlBoolean Bool
              | XlError String
              | XlMatrix [[XlValue]]
-   deriving Show
+   deriving Eq
+
+instance Show XlValue where
+   show (XlNumber d)  = show d
+   show (XlString s)  = show s
+   show (XlBoolean b) = show b
+   show (XlError e)   = show e
+   show (XlMatrix m)  = show m
 
 data XlAddr = XlAbs Int
             | XlRel Int
@@ -53,7 +62,23 @@ data XlEvent = XlEvent XlRC XlCell
 type XlValues = Map.Map XlRC XlValue
 
 data XlEnv = XlEnv XlCells XlValues
-   deriving Show
+
+instance Show XlEnv where
+   show (XlEnv cells values) = (Box.render $ Box.vcat Alignment.left $ map Box.text $ (map show (Map.toList cells))) ++ "\n\n" ++ (Box.render $ Box.hcat Alignment.left $ numbers : map doRow [0..25])
+      where
+         lpad m xs = reverse $ take m $ reverse $ (take m $ repeat ' ') ++ (take m xs)
+         numbers = Box.vcat Alignment.right $ map Box.text $ " " : map show [1..26]
+         doRow r = Box.vcat Alignment.left $ Box.text ['|', chr (r + 65)] : map doColumn [0..25]
+            where
+               doColumn c =
+                  let
+                     rc = (XlRC (XlAbs r) (XlAbs c))
+                     val = Map.lookup rc values
+                  in
+                     case val of
+                        Just (XlNumber n)  -> Box.text ('|' : (lpad 11 (toString n)))
+                        Just v  -> Box.text ('|' : show v)
+                        Nothing -> Box.text "|"
 
 toAbs :: XlRC -> XlRC -> XlRC
 toAbs base@(XlRC br bc) cell@(XlRC cr cc) = XlRC (toAbsAddr br cr) (toAbsAddr bc cc)
