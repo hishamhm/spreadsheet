@@ -140,10 +140,11 @@ checkString (v, vs) = (coerce v, vs)
       coerce (XlBoolean b) = XlString (if b == True then "1" else "0")
       coerce x = x
 
-evalFormula :: (XlFormula -> XlFormula) -> Set XlRC -> XlCells -> XlValues -> XlRC -> XlFormula -> (XlValue, XlValues)
-evalFormula scalar _ _ values rc v@(XlLit value) = (litValue $ scalar v, Map.insert rc value values)
+type Evaluator = Set XlRC -> XlValues -> XlRC -> XlFormula -> (XlValue, XlValues)
 
-evalFormula scalar visiting cells values rc (XlRef ref')  = 
+evalFormula :: Evaluator -> Set XlRC -> XlCells -> XlValues -> XlRC -> XlFormula -> (XlValue, XlValues)
+
+evalFormula evaluate visiting cells values rc (XlRef ref')  = 
    let
       ref = toAbs rc ref'
       give val = (val, Map.insert rc val values)
@@ -155,10 +156,10 @@ evalFormula scalar visiting cells values rc (XlRef ref')  =
             Just v  -> give v
             Nothing ->
                case Map.lookup ref cells of
-                  Just (XlCell formula) -> evalFormula scalar (Set.insert rc visiting) cells values ref formula
+                  Just (XlCell formula) -> evaluate visiting values ref formula
                   Nothing               -> give (XlNumber 0)
 
-evalFormula scalar visiting cells values rc (XlRng from to) = 
+evalFormula evaluate visiting cells values rc (XlRng from to) = 
    makeXlMatrix $ foldRange rc from to ([], values) zeroRow cellOp rowOp
       where
          makeXlMatrix (mtx, values) = (XlMatrix mtx, values)
@@ -168,30 +169,30 @@ evalFormula scalar visiting cells values rc (XlRng from to) =
 
          cellOp :: ([XlValue], XlValues) -> XlRC -> ([XlValue], XlValues)
          cellOp (curRow, curRowValues) curRc =
-            addToRow $ evalFormula scalar visiting cells curRowValues curRc (XlRef curRc)
+            addToRow $ evaluate visiting curRowValues rc (XlRef curRc)
                where addToRow (newValue, newRowValues) = (curRow ++ [newValue], newRowValues)
 
          rowOp :: ([[XlValue]], XlValues) -> Int -> ([XlValue], XlValues) -> ([[XlValue]], XlValues)
          rowOp (curMtx, _) r (newRow, newValues) = (curMtx ++ [newRow], newValues)
 
-evalFormula scalar visiting cells values rc (XlFun "IF" [i, t, e]) =
+evalFormula evaluate visiting cells values rc (XlFun "IF" [i, t, e]) =
    let
-      (vi, valuesi) = checkNumber $ evalFormula scalar (Set.insert rc visiting) cells values  rc i
+      (vi, valuesi) = checkNumber $ evaluate visiting values  rc i
       (vr, valuesr) = 
          case vi of
             (XlError _)  -> (vi, valuesi)
-            (XlNumber 0) -> evalFormula scalar (Set.insert rc visiting) cells valuesi rc e
-            (XlNumber _) -> evalFormula scalar (Set.insert rc visiting) cells valuesi rc t
+            (XlNumber 0) -> evaluate visiting valuesi rc e
+            (XlNumber _) -> evaluate visiting valuesi rc t
             _            -> ((XlError "#VALUE!"), valuesi)
    in
       (vr, Map.insert rc vr valuesr)
 
-evalFormula scalar visiting cells values rc (XlFun "INDIRECT" [addr]) =
+evalFormula evaluate visiting cells values rc (XlFun "INDIRECT" [addr]) =
    let
-      (va, valuesa) = checkString $ evalFormula scalar (Set.insert rc visiting) cells values rc addr
+      (va, valuesa) = checkString $ evaluate visiting values rc addr
       (vr, valuesr) = 
          case va of
-            XlString computed -> evalFormula scalar (Set.insert rc visiting) cells valuesa rc converted
+            XlString computed -> evaluate visiting valuesa rc converted
                                     where
                                        (a1, b2) = break (== ':') computed
                                        converted = 
@@ -202,9 +203,9 @@ evalFormula scalar visiting cells values rc (XlFun "INDIRECT" [addr]) =
    in
       (vr, Map.insert rc vr valuesr)
 
-evalFormula scalar visiting cells values rc (XlFun "ABS" [v]) =
+evalFormula evaluate visiting cells values rc (XlFun "ABS" [v]) =
    let
-      (v', values') = checkNumber $ evalFormula scalar (Set.insert rc visiting) cells values rc (scalar v)
+      (v', values') = checkNumber $ evaluate visiting values rc v
       
       doAbs (XlNumber n)  = XlNumber $ abs n
       doAbs _             = XlError "#VALUE!"
@@ -213,9 +214,9 @@ evalFormula scalar visiting cells values rc (XlFun "ABS" [v]) =
    in
       (val, Map.insert rc val values')
 
-evalFormula scalar visiting cells values rc (XlFun "SUM" [rng]) =
+evalFormula evaluate visiting cells values rc (XlFun "SUM" [rng]) =
    let
-      (vrng, values') = evalFormula scalar (Set.insert rc visiting) cells values rc rng
+      (vrng, values') = evaluate visiting values rc rng
       
       doSum e@(XlError _)  _              = e
       doSum _              e@(XlError _)  = e
@@ -232,10 +233,10 @@ evalFormula scalar visiting cells values rc (XlFun "SUM" [rng]) =
    in
       (val, Map.insert rc val values')
 
-evalFormula scalar visiting cells values rc (XlFun "+" [a, b]) =
+evalFormula evaluate visiting cells values rc (XlFun "+" [a, b]) =
    let
-      (va, values')  = checkNumber $ evalFormula scalar (Set.insert rc visiting) cells values  rc (scalar a)
-      (vb, values'') = checkNumber $ evalFormula scalar (Set.insert rc visiting) cells values' rc (scalar b)
+      (va, values')  = checkNumber $ evaluate visiting values  rc a
+      (vb, values'') = checkNumber $ evaluate visiting values' rc b
       
       doSum e@(XlError _) _               = e
       doSum _             e@(XlError _)   = e
@@ -246,10 +247,10 @@ evalFormula scalar visiting cells values rc (XlFun "+" [a, b]) =
    in
       (val, Map.insert rc val values'')
 
-evalFormula scalar visiting cells values rc (XlFun "&" [a, b]) =
+evalFormula evaluate visiting cells values rc (XlFun "&" [a, b]) =
    let
-      (va, values')  = checkString $ evalFormula scalar (Set.insert rc visiting) cells values  rc a
-      (vb, values'') = checkString $ evalFormula scalar (Set.insert rc visiting) cells values' rc b
+      (va, values')  = checkString $ evaluate visiting values  rc a
+      (vb, values'') = checkString $ evaluate visiting values' rc b
       
       doConcat e@(XlError _) _               = e
       doConcat _             e@(XlError _)   = e
@@ -260,10 +261,10 @@ evalFormula scalar visiting cells values rc (XlFun "&" [a, b]) =
    in
       (val, Map.insert rc val values'')
 
-evalFormula scalar visiting cells values rc (XlFun "/" [a, b]) =
+evalFormula evaluate visiting cells values rc (XlFun "/" [a, b]) =
    let
-      (va, values')  = checkNumber $ evalFormula scalar (Set.insert rc visiting) cells values  rc a
-      (vb, values'') = checkNumber $ evalFormula scalar (Set.insert rc visiting) cells values' rc b
+      (va, values')  = checkNumber $ evaluate visiting values  rc a
+      (vb, values'') = checkNumber $ evaluate visiting values' rc b
       
       doDiv e@(XlError _) _             = e
       doDiv _             e@(XlError _) = e
@@ -275,10 +276,10 @@ evalFormula scalar visiting cells values rc (XlFun "/" [a, b]) =
    in
       (val, Map.insert rc val values'')
 
-evalFormula scalar visiting cells values rc (XlFun "=" [a, b]) =
+evalFormula evaluate visiting cells values rc (XlFun "=" [a, b]) =
    let
-      (va, values')  = evalFormula scalar (Set.insert rc visiting) cells values  rc (scalar a)
-      (vb, values'') = evalFormula scalar (Set.insert rc visiting) cells values' rc (scalar b)
+      (va, values')  = evaluate visiting values  rc a
+      (vb, values'') = evaluate visiting values' rc b
       
       doEq e@(XlError _)  _              = e -- in case of two errors, the first is propagated
       doEq _              e@(XlError _)  = e
@@ -295,17 +296,38 @@ evalFormula scalar visiting cells values rc (XlFun "=" [a, b]) =
    in
       (val, Map.insert rc val values'')
 
+evalFormula ev vi ce va rc fo = trace (show vi ++"/"++ show ce ++"/"++ show va ++"/"++ show rc ++"/"++ show fo) undefined
+
 calcCell :: Set XlRC -> XlCells -> XlValues -> XlRC -> XlCell -> XlValues
-calcCell visiting cells values rc@(XlRC (XlAbs r) (XlAbs c)) (XlCell formula) = snd $ evalFormula implicitScalar visiting cells values rc formula
+calcCell visiting cells values rc@(XlRC (XlAbs r) (XlAbs c)) (XlCell formula) = snd $ scalarEvaluator visiting values rc formula
    where
+
+      plainEvaluator :: Evaluator
+      plainEvaluator visiting values rc (XlLit v) =
+         (v, Map.insert rc v values)
+      plainEvaluator visiting values rc formula =
+         evalFormula plainEvaluator (Set.insert rc visiting) cells values rc formula
+
+      -- NOTE that we can't just evaluate a range to a matrix and convert to scalar,
+      -- because explicit ranges are converted via intersection.
+      scalarEvaluator :: Evaluator
+      scalarEvaluator visiting values rc formula =
+         let
+            formula' = toScalar formula
+         in
+            case formula' of
+               XlLit v -> (v, Map.insert rc v values)
+               XlFun "SUM" fn -> evalFormula plainEvaluator (Set.insert rc visiting) cells values rc formula
+               _ -> evalFormula scalarEvaluator (Set.insert rc visiting) cells values rc formula'
+
       -- 3.3) Non-Scalar Evaluation (aka 'Array expressions') [page 27]
       -- 1) Evaluation as an implicit intersection of the argument with the expression's evaluation position.
       -- 1.1) Inline Arrays
       -- Element (0;0) of the array is used in the place of the array.
-      implicitScalar (XlLit (XlMatrix mtx)) = XlLit (head (head mtx))
+      toScalar (XlLit (XlMatrix mtx)) = XlLit (head (head mtx))
       
       -- 1.2) References
-      implicitScalar (XlRng rcFrom rcTo) =
+      toScalar (XlRng rcFrom rcTo) =
          let
             XlRC (XlAbs fromR) (XlAbs fromC) = toAbs rc rcFrom
             XlRC (XlAbs toR)   (XlAbs toC)   = toAbs rc rcTo
@@ -328,11 +350,23 @@ calcCell visiting cells values rc@(XlRC (XlAbs r) (XlAbs c)) (XlCell formula) = 
             else
                XlLit (XlError "#VALUE!")
 
-      implicitScalar v              = v
+      toScalar v = v
 
 {-
-calcCell visiting cells values rc (XlAFCell formula (y, x))                     = -- TODO
--}
+calcCell visiting cells values rc (XlAFCell formula (y, x)) = snd $ matrixEvaluator visiting values rc formula
+   where
+   
+      matrixEvaluator :: Evaluator
+      matrixEvaluator visiting values rc formula =
+         let
+            formula' = sliceMatrix formula
+         in
+            case formula of
+               XlLit v -> (v, Map.insert rc v values)
+               _ -> evalFormula matrixEvaluator (Set.insert rc visiting) cells values rc formula'
+               
+      sliceMatrix (XlLit (XlMatrix mtx)) =
+-}         
 
 updateCells cells event@(XlAddFormula rc formula) =
    Map.insert rc (XlCell formula) cells
