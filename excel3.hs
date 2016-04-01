@@ -64,7 +64,7 @@ type XlValues = Map.Map XlRC XlValue
 data XlEnv = XlEnv XlCells XlValues
 
 instance Show XlEnv where
-   show (XlEnv cells values) = (Box.render $ Box.vcat Alignment.left $ map Box.text $ (map show (Map.toList cells))) ++ "\n\n" ++ (Box.render $ Box.hcat Alignment.left $ numbers : map doRow [0..25])
+   show (XlEnv cells values) = (Box.render $ Box.vcat Alignment.left $ map Box.text $ (map show (Map.toList cells))) ++ "\n\n" ++ (Box.render $ Box.hcat Alignment.left $ numbers : map doRow [0..25]) ++ "\n" ++ show values
       where
          lpad m xs = reverse $ take m $ reverse $ (take m $ repeat ' ') ++ (take m xs)
          numbers = Box.vcat Alignment.right $ map Box.text $ " " : map show [1..26]
@@ -155,18 +155,21 @@ updateRC ev v vs = (v, Map.insert (rc ev) v vs)
 evalFormula :: Evaluator -> XlValues -> XlFormula -> (XlValue, XlValues)
 
 evalFormula ev values (XlRng from to) = 
-   (\(mtx, vs) -> (XlMatrix mtx, vs)) $ foldRange (rc ev) from to ([], values) zeroRow cellOp rowOp
-      where
-         zeroRow :: ([[XlValue]], XlValues) -> ([XlValue], XlValues)
-         zeroRow (_, curValues) = ([], curValues)
-
-         cellOp :: ([XlValue], XlValues) -> XlRC -> ([XlValue], XlValues)
-         cellOp (curRow, curRowValues) curRc =
-            addToRow $ (scalar ev) ev curRowValues (XlRef curRc)
-               where addToRow (newValue, newRowValues) = (curRow ++ [newValue], newRowValues)
-
-         rowOp :: ([[XlValue]], XlValues) -> Int -> ([XlValue], XlValues) -> ([[XlValue]], XlValues)
-         rowOp (curMtx, _) r (newRow, newValues) = (curMtx ++ [newRow], newValues)
+   let 
+      (mtx, valuesm) = foldRange (rc ev) from to ([], values) zeroRow cellOp rowOp
+         where
+            zeroRow :: ([[XlValue]], XlValues) -> ([XlValue], XlValues)
+            zeroRow (_, curValues) = ([], curValues)
+   
+            cellOp :: ([XlValue], XlValues) -> XlRC -> ([XlValue], XlValues)
+            cellOp (curRow, curRowValues) curRc =
+               addToRow $ (scalar ev) ev curRowValues (XlRef curRc)
+                  where addToRow (newValue, newRowValues) = (curRow ++ [newValue], newRowValues)
+   
+            rowOp :: ([[XlValue]], XlValues) -> Int -> ([XlValue], XlValues) -> ([[XlValue]], XlValues)
+            rowOp (curMtx, _) r (newRow, newValues) = (curMtx ++ [newRow], newValues)
+   in
+      updateRC ev (XlMatrix mtx) valuesm
 
 evalFormula ev values (XlFun "IF" [i, t, e]) =
    let
@@ -182,17 +185,16 @@ evalFormula ev values (XlFun "IF" [i, t, e]) =
 
 evalFormula ev values (XlFun "INDIRECT" [addr]) =
    let
+      convert s =
+         case break (== ':') s of
+            (a1, ':':b2) -> (XlRng (toRC a1) (toRC b2)) -- FIXME error checking in toRC
+            _            -> (XlRef (toRC s))            -- FIXME error checking in toRC
+
       (va, valuesa) = checkString $ (scalar ev) ev values addr
       (vr, valuesr) = 
          case va of
-            XlString computed -> (scalar ev) ev valuesa converted
-                                    where
-                                       (a1, b2) = break (== ':') computed
-                                       converted = 
-                                          case b2 of
-                                             (':':b2') -> (XlRng (toRC a1) (toRC b2')) -- FIXME error checking
-                                             _         -> (XlRef (toRC computed)) -- FIXME error checking
-            _                 -> ((XlError "#VALUE!"), valuesa)
+            XlString s -> (scalar ev) ev valuesa (convert s)
+            _          -> ((XlError "#VALUE!"), valuesa)
    in
       updateRC ev vr valuesr
 
@@ -320,7 +322,7 @@ calcCell cells values myRC@(XlRC (XlAbs r) (XlAbs c)) (XlCell formula) = snd $ (
       
       arrayEvaluator ev values formula =
          case formula of
-            XlLit v -> (v, Map.insert (rc ev) v values)
+            XlLit v -> updateRC ev v values
             XlRef ref -> getRef ev cells values ref
             _ -> evalFormula ev values formula
          
@@ -331,7 +333,7 @@ calcCell cells values myRC@(XlRC (XlAbs r) (XlAbs c)) (XlCell formula) = snd $ (
             formula' = toScalar formula
          in
             case formula' of
-               XlLit v -> (v, Map.insert (rc ev) v values)
+               XlLit v -> updateRC ev v values
                XlRef ref -> getRef ev cells values ref
                _ -> evalFormula ev values formula'
 
@@ -367,25 +369,46 @@ calcCell cells values myRC@(XlRC (XlAbs r) (XlAbs c)) (XlCell formula) = snd $ (
 
       toScalar v = v
 
-{-
-calcCell visiting cells values rc (XlAFCell formula (y, x)) = snd $ (scalar ev) ev values rc formula
+calcCell cells values myRC (XlAFCell formula (x, y)) = snd $ (scalar ev) ev values formula
    where
    
       ev = Evaluator {
+         rc = myRC,
+         visiting = Set.singleton myRC,
          scalar = scalarEvaluator,
          array = arrayEvaluator
       }
-   
-      matrixEvaluator visiting values rc formula =
+      
+      arrayEvaluator ev values formula =
+         case formula of
+            XlLit v -> updateRC ev v values
+            XlRef ref -> getRef ev cells values ref
+            _ -> evalFormula ev values formula
+
+      scalarEvaluator ev values formula =
          let
-            formula' = sliceMatrix formula
+            formula' = toScalar formula
          in
-            case formula of
-               XlLit v -> (v, Map.insert rc v values)
-               _ -> evalFormula matrixEvaluator (Set.insert rc visiting) cells values rc formula'
-               
-      sliceMatrix (XlLit (XlMatrix mtx)) =
--}
+            case formula' of
+               XlLit v -> updateRC ev v values
+               XlRef ref -> getRef ev cells values ref
+               _ -> evalFormula ev values formula'
+
+      toScalar (XlLit (XlMatrix mtx)) =
+         XlLit $ trace (show mtx ++ " / " ++ show y ++ " / " ++ show x ++ " length mtx <= y " ++ (show (length (mtx !! y) > x) ++ " length mtx " ++ show (length (mtx !! y)) )) $ if length mtx > y && length (mtx !! y) > x
+                 then mtx !! y !! x
+                 else XlError "#N/A!"
+
+      toScalar (XlRng rcFrom rcTo) =
+         let
+            XlRC (XlAbs fromR) (XlAbs fromC) = toAbs myRC rcFrom
+            XlRC (XlAbs toR)   (XlAbs toC)   = toAbs myRC rcTo
+         in
+            if (toR - fromR >= x) && (toC - fromC >= y)
+            then XlRef (XlRC (XlAbs (fromR + x)) (XlAbs (fromC + y)))
+            else XlLit (XlError "#N/A!")
+
+      toScalar v = v
 
 updateCells cells event@(XlAddFormula rc formula) =
    Map.insert rc (XlCell formula) cells
@@ -393,8 +416,8 @@ updateCells cells event@(XlAddFormula rc formula) =
 updateCells cells event@(XlAddArrayFormula rcFrom rcTo formula) =
    fst $ foldRange rcFrom rcFrom rcTo (cells, (0, 0)) id cellOp rowOp
       where
-         cellOp (cells, (y, x)) rc = (Map.insert rc (XlAFCell formula (y, x)) cells, (y, x + 1))
-         rowOp _ r (cells, (y, x)) = (cells, (y + 1, 0))
+         cellOp (cells, (x, y)) rc = (Map.insert rc (XlAFCell formula (x, y)) cells, (x, y + 1))
+         rowOp _ r (cells, (x, y)) = (cells, (x + 1, 0))
 
 run :: XlWorksheet -> [XlEvent] -> XlEnv
 run sheet@(XlWorksheet cells) events =
@@ -457,7 +480,11 @@ main =
             ( (XlAddFormula (toRC "A16") (XlFun "=" [cell "K2", cell "A15"]) ),         XlError "#VALUE!" ),
             ( (XlAddFormula (toRC "A17") (XlFun "=" [cell "A15", cell "K2"]) ),         XlError "#DIV/0!" ),
 
-            ( (XlAddFormula (toRC "G1") (XlFun "+" [num 1000, range "A1" "A2"]) ),      XlNumber 1015 )
+            ( (XlAddFormula (toRC "G1") (XlFun "+" [num 1000, range "A1" "A2"]) ),      XlNumber 1015 ),
+
+            ( (XlAddFormula (toRC "C5") (range "A1" "A2") ),                              XlError "#VALUE!" ),
+            ( (XlAddArrayFormula (toRC "F5") (toRC "F6") (XlLit (XlMatrix [[XlNumber 15], [XlNumber 16]])) ), XlNumber 15 ),
+            ( (XlAddArrayFormula (toRC "D5") (toRC "D6") (XlFun "+" [range "A1" "A2", num 100]) ), XlNumber 115 )
          ]
    
       env@(XlEnv cells values) = run (XlWorksheet Map.empty) (map fst operations)
@@ -470,6 +497,7 @@ main =
             doCheck (op, value) =
                case op of
                   XlAddFormula rc fml -> if values ! rc == value then Nothing else Just rc
+                  XlAddArrayFormula rcFrom rcTo fml -> if values ! rcFrom == value then Nothing else Just rcFrom
                   _ -> Nothing
    in
       do
