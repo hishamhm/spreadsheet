@@ -150,13 +150,13 @@ data Evaluator = Evaluator {
 instance Show Evaluator where
    show ev = "Evaluator\nRC: " ++ show (rc ev) ++ "\nVisiting: " ++ show (visiting ev) ++ "\n"
 
+updateRC ev v vs = (v, Map.insert (rc ev) v vs)
+
 evalFormula :: Evaluator -> XlValues -> XlFormula -> (XlValue, XlValues)
 
 evalFormula ev values (XlRng from to) = 
-   makeXlMatrix $ foldRange (rc ev) from to ([], values) zeroRow cellOp rowOp
+   (\(mtx, vs) -> (XlMatrix mtx, vs)) $ foldRange (rc ev) from to ([], values) zeroRow cellOp rowOp
       where
-         makeXlMatrix (mtx, values) = (XlMatrix mtx, values)
-      
          zeroRow :: ([[XlValue]], XlValues) -> ([XlValue], XlValues)
          zeroRow (_, curValues) = ([], curValues)
 
@@ -178,7 +178,7 @@ evalFormula ev values (XlFun "IF" [i, t, e]) =
             (XlNumber _) -> (scalar ev) ev valuesi t
             _            -> ((XlError "#VALUE!"), valuesi)
    in
-      (vr, Map.insert (rc ev) vr valuesr)
+      updateRC ev vr valuesr
 
 evalFormula ev values (XlFun "INDIRECT" [addr]) =
    let
@@ -194,7 +194,7 @@ evalFormula ev values (XlFun "INDIRECT" [addr]) =
                                              _         -> (XlRef (toRC computed)) -- FIXME error checking
             _                 -> ((XlError "#VALUE!"), valuesa)
    in
-      (vr, Map.insert (rc ev) vr valuesr)
+      updateRC ev vr valuesr
 
 evalFormula ev values (XlFun "ABS" [v]) =
    let
@@ -205,7 +205,7 @@ evalFormula ev values (XlFun "ABS" [v]) =
       
       val = doAbs v'
    in
-      (val, Map.insert (rc ev) val values')
+      updateRC ev val values'
 
 evalFormula ev values (XlFun "SUM" [rng]) =
    let
@@ -224,7 +224,7 @@ evalFormula ev values (XlFun "SUM" [rng]) =
             XlMatrix mtx -> foldl' (foldl' doSum) (XlNumber 0) mtx
             _            -> XlError "#VALUE!"
    in
-      (val, Map.insert (rc ev) val values')
+      updateRC ev val values'
 
 evalFormula ev values (XlFun "+" [a, b]) =
    let
@@ -238,7 +238,7 @@ evalFormula ev values (XlFun "+" [a, b]) =
       
       val = doSum va vb
    in
-      (val, Map.insert (rc ev) val values'')
+      updateRC ev val values''
 
 evalFormula ev values (XlFun "&" [a, b]) =
    let
@@ -252,7 +252,7 @@ evalFormula ev values (XlFun "&" [a, b]) =
       
       val = doConcat va vb
    in
-      (val, Map.insert (rc ev) val values'')
+      updateRC ev val values''
 
 evalFormula ev values (XlFun "/" [a, b]) =
    let
@@ -267,7 +267,7 @@ evalFormula ev values (XlFun "/" [a, b]) =
       
       val = doDiv va vb
    in
-      (val, Map.insert (rc ev) val values'')
+      updateRC ev val values''
 
 evalFormula ev values (XlFun "=" [a, b]) =
    let
@@ -287,7 +287,7 @@ evalFormula ev values (XlFun "=" [a, b]) =
       
       val = doEq va vb
    in
-      (val, Map.insert (rc ev) val values'')
+      updateRC ev val values''
 
 evalFormula ev va fo = trace ("[ev] "++ show ev ++"\n[va] "++ show va ++"\n[fo] "++ show fo++"\n") undefined
 
@@ -304,7 +304,7 @@ getRef ev cells values ref' =
             Just v  -> give v
             Nothing ->
                case Map.lookup ref cells of
-                  Just (XlCell formula) -> (scalar ev) (ev { rc = ref }) values formula
+                  Just (XlCell formula) -> (scalar ev) (ev { rc = ref, visiting = Set.insert ref (visiting ev) }) values formula
                   Nothing               -> give (XlNumber 0)
 
 calcCell :: XlCells -> XlValues -> XlRC -> XlCell -> XlValues
@@ -313,7 +313,7 @@ calcCell cells values myRC@(XlRC (XlAbs r) (XlAbs c)) (XlCell formula) = snd $ (
    
       ev = Evaluator {
          rc = myRC,
-         visiting = Set.empty,
+         visiting = Set.singleton myRC,
          scalar = scalarEvaluator,
          array = arrayEvaluator
       }
@@ -322,7 +322,7 @@ calcCell cells values myRC@(XlRC (XlAbs r) (XlAbs c)) (XlCell formula) = snd $ (
          case formula of
             XlLit v -> (v, Map.insert (rc ev) v values)
             XlRef ref -> getRef ev cells values ref
-            _ -> evalFormula (ev { visiting = Set.insert (rc ev) (visiting ev) }) values formula
+            _ -> evalFormula ev values formula
          
       -- NOTE that we can't just evaluate a range to a matrix and convert to scalar,
       -- because explicit ranges are converted via intersection.
@@ -333,7 +333,7 @@ calcCell cells values myRC@(XlRC (XlAbs r) (XlAbs c)) (XlCell formula) = snd $ (
             case formula' of
                XlLit v -> (v, Map.insert (rc ev) v values)
                XlRef ref -> getRef ev cells values ref
-               _ -> evalFormula (ev { visiting = Set.insert (rc ev) (visiting ev) }) values formula'
+               _ -> evalFormula ev values formula'
 
       -- 3.3) Non-Scalar Evaluation (aka 'Array expressions') [page 27]
       -- 1) Evaluation as an implicit intersection of the argument with the expression's evaluation position.
