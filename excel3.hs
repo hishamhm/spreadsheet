@@ -312,16 +312,16 @@ getRef ev cells values ref' =
             Just v  -> give v
             Nothing ->
                case Map.lookup ref cells of
-                  Just (XlCell formula) -> (scalar ev) (ev { rc = ref, visiting = Set.insert ref (visiting ev) }) values formula
-                  Nothing               -> give (XlNumber 0)
+                  Just cell -> give $ fst $ calcCell (Set.insert ref (visiting ev)) cells values ref cell
+                  Nothing -> give (XlNumber 0)
 
-calcCell :: XlCells -> XlValues -> XlRC -> XlCell -> XlValues
-calcCell cells values myRC@(XlRC (XlAbs r) (XlAbs c)) (XlCell formula) = snd $ (scalar ev) ev values formula
+calcCell :: Set XlRC -> XlCells -> XlValues -> XlRC -> XlCell -> (XlValue, XlValues)
+calcCell visiting cells values myRC@(XlRC (XlAbs r) (XlAbs c)) (XlCell formula) = (scalar ev) ev values formula
    where
    
       ev = Evaluator {
          rc = myRC,
-         visiting = Set.singleton myRC,
+         visiting = visiting,
          scalar = scalarEvaluator,
          array = arrayEvaluator
       }
@@ -375,12 +375,12 @@ calcCell cells values myRC@(XlRC (XlAbs r) (XlAbs c)) (XlCell formula) = snd $ (
 
       toScalar v = v
 
-calcCell cells values myRC (XlAFCell formula (x, y)) = snd $ (scalar ev) ev values formula
+calcCell visiting cells values myRC (XlAFCell formula (x, y)) = (scalar ev) ev values formula
    where
    
       ev = Evaluator {
          rc = myRC,
-         visiting = Set.singleton myRC,
+         visiting = visiting,
          scalar = scalarEvaluator,
          array = arrayEvaluator
       }
@@ -458,7 +458,7 @@ run sheet@(XlWorksheet cells) events =
             acc rc cell values =
                if Map.member rc values
                then values
-               else calcCell newCells values rc cell
+               else snd $ calcCell (Set.singleton rc) newCells values rc cell
          in
             XlEnv newCells (Map.foldrWithKey acc Map.empty newCells)
 
@@ -491,7 +491,7 @@ main =
                where
                   doCheck (op, value) =
                      case op of
-                        XlAddFormula rc fml -> if values ! rc == value then Nothing else Just rc
+                        XlAddFormula rc fml -> if trace (show rc) values ! rc == value then Nothing else Just rc
                         XlAddArrayFormula rcFrom rcTo fml -> if values ! rcFrom == value then Nothing else Just rcFrom
          in do
             print env
@@ -552,5 +552,5 @@ main =
          -- 3.3 2 2.1 2.1.4) Note 5
          runTest [
             ( XlAddArrayFormula (toRC "A1") (toRC "B3") (nummtx [[1,2],[3,4],[5,6]]), XlNumber 1 ),
-            ( XlAddFormula (toRC "B4") (XlRef (toRC "B2")), XlNumber 4 )
+            ( XlAddFormula (toRC "C3") (XlRef (toRC "B2")), XlNumber 4 )
             ]
