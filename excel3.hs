@@ -36,8 +36,8 @@ data XlRC = XlRC XlAddr XlAddr
    deriving (Eq, Ord)
 
 instance Show XlRC where
-   show (XlRC r@(XlAbs rn) c@(XlAbs cn)) = "<" ++ [chr (rn + 65)] ++ show (cn + 1) ++ ">"
-   show (XlRC r c) = "R" ++ show r ++ "C" ++ show c
+   show (XlRC r@(XlAbs rn) c@(XlAbs cn)) = "<" @@ [chr (cn + 65)] @@ (rn + 1) @@ ">"
+   show (XlRC r c) = "R" @@ r @@ "C" @@ c
 
 data XlFormula = XlLit XlValue
                | XlFun String [XlFormula]
@@ -65,23 +65,28 @@ type XlValues = Map.Map XlRC XlValue
 data XlEnv = XlEnv XlCells XlValues
 
 instance Show XlEnv where
-   show (XlEnv cells values) = (Box.render $ Box.vcat Alignment.left $ map Box.text $ (map show (Map.toList cells))) ++ "\n\n" ++ (Box.render $ Box.hcat Alignment.left $ numbers : map doRow [0..25]) ++ "\n" ++ show values
-      where
-         lpad m xs = reverse $ take m $ reverse $ (take m $ repeat ' ') ++ (take m xs)
-         numbers = Box.vcat Alignment.right $ map Box.text $ " " : map show [1..26]
-         doRow r = Box.vcat Alignment.left $ Box.text ['|', chr (r + 65)] : map doColumn [0..25]
-            where
-               doColumn c =
-                  let
-                     rc = (XlRC (XlAbs r) (XlAbs c))
-                     val = Map.lookup rc values
-                  in
-                     case val of
-                        Just (XlNumber n)  -> Box.text ('|' : (lpad 11 (toString n)))
-                        Just v  -> Box.text ('|' : show v)
-                        Nothing -> Box.text "|"
-               
-
+   show (XlEnv cells values) = 
+      "\nCells:\n" @@ listCells @@ "\nValues:\n" @@ tableValues @@ "\n" @@ values @@ "\n"
+         where
+            maxRow = Map.foldrWithKey (\(XlRC (XlAbs r) _) _ mx -> max r mx) 0 values
+            maxCol = Map.foldrWithKey (\(XlRC _ (XlAbs c)) _ mx -> max c mx) 0 values
+            listCells   = Box.render $ Box.vcat Alignment.left $ map Box.text $ map show (Map.toList cells)
+            tableValues = Box.render $ Box.hcat Alignment.left $ numbersColumn : map doColumn [0..maxCol]
+               where 
+                  numbersColumn = Box.vcat Alignment.right $ map Box.text $ " " : map show [1..(maxRow + 1)]
+                  doColumn c    = Box.vcat Alignment.left  $ Box.text ['|', chr (c + 65)] : map (\s -> Box.text ('|' : doRow s)) [0..maxRow]
+                     where
+                        doRow r =
+                           let
+                              rc = (XlRC (XlAbs r) (XlAbs c))
+                              val = Map.lookup rc values
+                              lpad m xs = reverse $ take m $ reverse $ (take m $ repeat ' ') ++ (take m xs)
+                           in
+                              case val of
+                                 Just (XlNumber n)  -> lpad 11 (toString n)
+                                 Just v             -> show v
+                                 Nothing            -> ""
+            
 toAbs :: XlRC -> XlRC -> XlRC
 toAbs base@(XlRC br bc) cell@(XlRC cr cc) = XlRC (toAbsAddr br cr) (toAbsAddr bc cc)
    where 
@@ -93,7 +98,7 @@ toAbs base@(XlRC br bc) cell@(XlRC cr cc) = XlRC (toAbsAddr br cr) (toAbsAddr bc
 -- Converts Excel addresses in "A1" format to internal RC format.
 -- Supports only rows A-Z, and absolute addresses.
 toRC :: String -> XlRC
-toRC (l:num) = XlRC (XlAbs ((ord l) - 65)) (XlAbs ((read num) - 1))
+toRC (l:num) = XlRC (XlAbs ((read num) - 1)) (XlAbs ((ord l) - 65)) 
 
 toString :: Double -> String
 toString n =
@@ -395,19 +400,40 @@ calcCell cells values myRC (XlAFCell formula (x, y)) = snd $ (scalar ev) ev valu
                XlRef ref -> getRef ev cells values ref
                _ -> evalFormula ev values formula'
 
+      -- 2) Matrix evaluation
+      -- If an expression is being evaluated in a cell flagged as a being part of a 'Matrix'
+      -- (OpenDocument 8.1.3 table:number-matrix-columns-spanned):
+
+      -- 2.1) The portion of a non-scalar result to be displayed need not be co-extensive with a
+      -- specified display area. The portion of the non-scalar result to be displayed is
+      -- determined by:
+
+
+      displayRule :: Int -> Int -> (Int -> Int -> XlFormula) -> XlFormula
+      displayRule sizeX sizeY getXY =
+         -- 2.1.1) If the position to be displayed exists in the result, display that position.
+         if sizeY > y && sizeX > x
+         then getXY x y
+         -- 2.1.2) If the non-scalar result is 1 column wide, subsequent columns in the display
+         -- area display the value in the first column.
+         else if sizeX == 1 && sizeY > y
+         then getXY y 0
+         -- 2.1.3) If the non-scalar result is 1 row high, subsequent rows in the display area use
+         -- the value of the first row.
+         else if sizeY == 1 && sizeX > x
+         then getXY 0 x
+         -- 2.1.4) If none of the other rules apply #N/A
+         else XlLit $ XlError "#N/A!"
+
       toScalar (XlLit (XlMatrix mtx)) =
-         XlLit $ trace (show mtx ++ " / " ++ show y ++ " / " ++ show x ++ " length mtx <= y " ++ (show (length (mtx !! y) > x) ++ " length mtx " ++ show (length (mtx !! y)) )) $ if length mtx > y && length (mtx !! y) > x
-                 then mtx !! y !! x
-                 else XlError "#N/A!"
+         displayRule (foldr max 0 (map length mtx)) (length mtx) (\x y -> XlLit $ mtx !! y !! x)
 
       toScalar (XlRng rcFrom rcTo) =
          let
             XlRC (XlAbs fromR) (XlAbs fromC) = toAbs myRC rcFrom
             XlRC (XlAbs toR)   (XlAbs toC)   = toAbs myRC rcTo
          in
-            if (toR - fromR >= x) && (toC - fromC >= y)
-            then XlRef (XlRC (XlAbs (fromR + x)) (XlAbs (fromC + y)))
-            else XlLit (XlError "#N/A!")
+            displayRule (1 + toC - fromC) (1 + toR - fromR) (\x y -> XlRef (XlRC (XlAbs (fromR + y)) (XlAbs (fromC + x))))
 
       toScalar v = v
 
@@ -417,8 +443,8 @@ updateCells cells event@(XlAddFormula rc formula) =
 updateCells cells event@(XlAddArrayFormula rcFrom rcTo formula) =
    fst $ foldRange rcFrom rcFrom rcTo (cells, (0, 0)) id cellOp rowOp
       where
-         cellOp (cells, (x, y)) rc = (Map.insert rc (XlAFCell formula (x, y)) cells, (x, y + 1))
-         rowOp _ r (cells, (x, y)) = (cells, (x + 1, 0))
+         cellOp (cells, (x, y)) rc = (Map.insert rc (XlAFCell formula (x, y)) cells, (x + 1, y))
+         rowOp _ r (cells, (x, y)) = (cells, (0, y + 1))
 
 run :: XlWorksheet -> [XlEvent] -> XlEnv
 run sheet@(XlWorksheet cells) events =
@@ -444,6 +470,8 @@ str s = XlLit (XlString s)
 num :: Double -> XlFormula
 num n = XlLit (XlNumber n)
 
+nummtx mx = XlLit (XlMatrix (map (map XlNumber) mx))
+
 cell :: String -> XlFormula
 cell a1 = XlRef (toRC a1)
 
@@ -453,56 +481,76 @@ range a1 b2 = XlRng (toRC a1) (toRC b2)
 main :: IO ()
 main = 
    let
-      operations = [
-            ( (XlAddFormula (toRC "A1") (num 15)),                                      XlNumber 15 ),
-            ( (XlAddFormula (toRC "B1") (num 0)),                                       XlNumber 15 ), -- final state
-            ( (XlAddFormula (toRC "A2") (XlFun "+" [cell "A1", cell "B1"])),            XlNumber 30 ), -- final state
-            ( (XlAddFormula (toRC "B1") (cell "A1")),                                   XlNumber 15 ),
-            ( (XlAddFormula (toRC "C1") (str "B")),                                     XlString "B" ),
-            ( (XlAddFormula (toRC "C2") (num 1)),                                       XlNumber 1 ),
-            ( (XlAddFormula (toRC "B2") (XlFun "INDIRECT" [XlFun "&" [cell "C1", cell "C2"]])), XlNumber 15 ),
-            ( (XlAddFormula (toRC "D1") (XlFun "SUM" [range "A1" "B2"]) ),              XlNumber 75 ),
-            ( (XlAddFormula (toRC "E1") (XlFun "SUM" [range "B1" "B2"]) ),              XlNumber 30 ),
-            ( (XlAddFormula (toRC "F1") (XlFun "SUM" [range "D1" "E1"]) ),              XlNumber 105 ),
-            
-            ( (XlAddFormula (toRC "H1") (num 10) ),                                     XlNumber 10 ),
-            ( (XlAddFormula (toRC "I1") (num (-20)) ),                                  XlNumber (-20) ),
-            ( (XlAddFormula (toRC "J1") (num 30) ),                                     XlNumber 30 ),
-            ( (XlAddFormula (toRC "I2") (XlFun "ABS" [range "H1" "J1"]) ),              XlNumber 20 ),
-            ( (XlAddFormula (toRC "K2") (XlFun "ABS" [range "H1" "J1"]) ),              XlError "#VALUE!" ),
-            
-            ( (XlAddFormula (toRC "A10") (num 10) ),                                    XlNumber 10 ),
-            ( (XlAddFormula (toRC "A11") (str "10") ),                                  XlString "10" ),
-            ( (XlAddFormula (toRC "A12") (XlFun "=" [cell "A10", cell "A11"]) ),        XlBoolean False ),
-            ( (XlAddFormula (toRC "A13") (XlFun "=" [cell "A10", num 10]) ),            XlBoolean True ),
-            ( (XlAddFormula (toRC "A14") (XlFun "=" [cell "A13", num 1]) ),             XlBoolean True ),
-   
-            ( (XlAddFormula (toRC "A15") (XlFun "/" [num 1, num 0]) ),                  XlError "#DIV/0!" ),
-            ( (XlAddFormula (toRC "A16") (XlFun "=" [cell "K2", cell "A15"]) ),         XlError "#VALUE!" ),
-            ( (XlAddFormula (toRC "A17") (XlFun "=" [cell "A15", cell "K2"]) ),         XlError "#DIV/0!" ),
-
-            ( (XlAddFormula (toRC "G1") (XlFun "+" [num 1000, range "A1" "A2"]) ),      XlNumber 1015 ),
-
-            ( (XlAddFormula (toRC "C5") (range "A1" "A2") ),                              XlError "#VALUE!" ),
-            ( (XlAddArrayFormula (toRC "F5") (toRC "F6") (XlLit (XlMatrix [[XlNumber 15], [XlNumber 16]])) ), XlNumber 15 ),
-            ( (XlAddArrayFormula (toRC "D5") (toRC "D6") (XlFun "+" [range "A1" "A2", num 100]) ), XlNumber 115 )
-         ]
-   
-      env@(XlEnv cells values) = run (XlWorksheet Map.empty) (map fst operations)
-
-      value :: String -> XlValue
-      value a1 = values ! (toRC a1)
-
-      failures = filter (\v -> v /= Nothing) $ map doCheck operations
-         where
-            doCheck (op, value) =
-               case op of
-                  XlAddFormula rc fml -> if values ! rc == value then Nothing else Just rc
-                  XlAddArrayFormula rcFrom rcTo fml -> if values ! rcFrom == value then Nothing else Just rcFrom
-                  _ -> Nothing
+      runTest operations =
+         let
+            env@(XlEnv cells values) = run (XlWorksheet Map.empty) (map fst operations)
+            value :: String -> XlValue
+            value a1 = values ! (toRC a1)
+         
+            failures = filter (\v -> v /= Nothing) $ map doCheck operations
+               where
+                  doCheck (op, value) =
+                     case op of
+                        XlAddFormula rc fml -> if values ! rc == value then Nothing else Just rc
+                        XlAddArrayFormula rcFrom rcTo fml -> if values ! rcFrom == value then Nothing else Just rcFrom
+         in do
+            print env
+            if null failures
+            then putStrLn "All passed!"
+            else print failures
    in
       do
-         print env
-         if null failures
-         then putStrLn "All passed!"
-         else print failures
+         runTest [
+            ( XlAddFormula (toRC "A1") (num 15),                                      XlNumber 15 ),
+            ( XlAddFormula (toRC "B1") (num 0),                                       XlNumber 15 ), -- final state
+            ( XlAddFormula (toRC "A2") (XlFun "+" [cell "A1", cell "B1"]),            XlNumber 30 ), -- final state
+            ( XlAddFormula (toRC "B1") (cell "A1"),                                   XlNumber 15 ),
+            ( XlAddFormula (toRC "C1") (str "B"),                                     XlString "B" ),
+            ( XlAddFormula (toRC "C2") (num 1),                                       XlNumber 1 ),
+            ( XlAddFormula (toRC "B2") (XlFun "INDIRECT" [XlFun "&" [cell "C1", cell "C2"]]), XlNumber 15 ),
+            ( XlAddFormula (toRC "D1") (XlFun "SUM" [range "A1" "B2"]),              XlNumber 75 ),
+            ( XlAddFormula (toRC "E1") (XlFun "SUM" [range "B1" "B2"]),              XlNumber 30 ),
+            ( XlAddFormula (toRC "F1") (XlFun "SUM" [range "D1" "E1"]),              XlNumber 105 ),
+            
+            ( XlAddFormula (toRC "H1") (num 10),                                     XlNumber 10 ),
+            ( XlAddFormula (toRC "I1") (num (-20)),                                  XlNumber (-20) ),
+            ( XlAddFormula (toRC "J1") (num 30),                                     XlNumber 30 ),
+            ( XlAddFormula (toRC "I2") (XlFun "ABS" [range "H1" "J1"]),              XlNumber 20 ),
+            ( XlAddFormula (toRC "K2") (XlFun "ABS" [range "H1" "J1"]),              XlError "#VALUE!" ),
+            
+            ( XlAddFormula (toRC "A10") (num 10),                                    XlNumber 10 ),
+            ( XlAddFormula (toRC "A11") (str "10"),                                  XlString "10" ),
+            ( XlAddFormula (toRC "A12") (XlFun "=" [cell "A10", cell "A11"]),        XlBoolean False ),
+            ( XlAddFormula (toRC "A13") (XlFun "=" [cell "A10", num 10]),            XlBoolean True ),
+            ( XlAddFormula (toRC "A14") (XlFun "=" [cell "A13", num 1]),             XlBoolean True ),
+   
+            ( XlAddFormula (toRC "A15") (XlFun "/" [num 1, num 0]),                  XlError "#DIV/0!" ),
+            ( XlAddFormula (toRC "A16") (XlFun "=" [cell "K2", cell "A15"]),         XlError "#VALUE!" ),
+            ( XlAddFormula (toRC "A17") (XlFun "=" [cell "A15", cell "K2"]),         XlError "#DIV/0!" ),
+
+            ( XlAddFormula (toRC "G1") (XlFun "+" [num 1000, range "A1" "A2"]),      XlNumber 1015 ),
+
+            ( XlAddFormula (toRC "C5") (range "A1" "A2"),                              XlError "#VALUE!" ),
+            ( XlAddArrayFormula (toRC "F5") (toRC "F6") (nummtx [[15], [16]]), XlNumber 15 ),
+            ( XlAddArrayFormula (toRC "D5") (toRC "D6") (XlFun "+" [range "A1" "A2", num 100]), XlNumber 115 )
+            ]
+         -- 3.3 1 1.1) Note 1
+         runTest [
+            ( XlAddFormula (toRC "A1") (XlFun "ABS" [nummtx [[-3, -4]]]), XlNumber 3 ),
+            ( XlAddFormula (toRC "A2") (XlFun "ABS" [nummtx [[-3], [-4]]]), XlNumber 3 ),
+            ( XlAddFormula (toRC "A3") (XlFun "ABS" [nummtx [[-3, -4], [-6, -8]]]), XlNumber 3 ),
+            ( XlAddFormula (toRC "A4") (nummtx [[1, 2, 3], [4, 5, 6]]), XlNumber 1 )
+            ]
+         -- 3.3 1 1.2 1.2.1) Notes 2 and 3
+         runTest [
+            ( XlAddFormula (toRC "A1") (num (-10)), XlNumber (-10) ),
+            ( XlAddFormula (toRC "B1") (num (-20)), XlNumber (-20) ),
+            ( XlAddFormula (toRC "C1") (num (-30)), XlNumber (-30) ),
+            ( XlAddFormula (toRC "B2") (XlFun "ABS" [range "A1" "C1"]), XlNumber 20 ),
+            ( XlAddFormula (toRC "D4") (XlFun "ABS" [range "A1" "C1"]), XlError "#VALUE!" )
+            ]
+         -- 3.3 2 2.1 2.1.4) Note 5
+         runTest [
+            ( XlAddArrayFormula (toRC "A1") (toRC "B3") (nummtx [[1,2],[3,4],[5,6]]), XlNumber 1 ),
+            ( XlAddFormula (toRC "B4") (XlRef (toRC "B2")), XlNumber 4 )
+            ]
