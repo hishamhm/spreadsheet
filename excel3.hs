@@ -8,6 +8,7 @@ import Debug.Trace
 import Data.Fixed
 import Text.PrettyPrint.Boxes as Box (render, hcat, vcat, text)
 import Text.PrettyPrint.Boxes as Alignment (left, right)
+import ShowConcat ((@@))
 
 data XlValue = XlNumber Double
              | XlString String
@@ -29,7 +30,7 @@ data XlAddr = XlAbs Int
 
 instance Show XlAddr where
    show (XlAbs n) = show n
-   show (XlRel n) = "[" ++ show n ++ "]"
+   show (XlRel n) = "[" @@ n @@ "]"
 
 data XlRC = XlRC XlAddr XlAddr
    deriving (Eq, Ord)
@@ -87,7 +88,7 @@ toAbs base@(XlRC br bc) cell@(XlRC cr cc) = XlRC (toAbsAddr br cr) (toAbsAddr bc
       toAbsAddr :: XlAddr -> XlAddr -> XlAddr
       toAbsAddr _ a@(XlAbs _) = a
       toAbsAddr (XlAbs aa) (XlRel rr) = XlAbs (aa + rr)
-      toAbsAddr base@(XlRel _) _ = error ("base in toAbs must be absolute, got " ++ show base) 
+      toAbsAddr base@(XlRel _) _ = error ("base in toAbs must be absolute, got " @@ base) 
 
 -- Converts Excel addresses in "A1" format to internal RC format.
 -- Supports only rows A-Z, and absolute addresses.
@@ -148,7 +149,7 @@ data Evaluator = Evaluator {
 }
 
 instance Show Evaluator where
-   show ev = "Evaluator\nRC: " ++ show (rc ev) ++ "\nVisiting: " ++ show (visiting ev) ++ "\n"
+   show ev = "Evaluator\nRC: " @@ rc ev @@ "\nVisiting: " @@ visiting ev @@ "\n"
 
 updateRC ev v vs = (v, Map.insert (rc ev) v vs)
 
@@ -291,7 +292,7 @@ evalFormula ev values (XlFun "=" [a, b]) =
    in
       updateRC ev val values''
 
-evalFormula ev va fo = trace ("[ev] "++ show ev ++"\n[va] "++ show va ++"\n[fo] "++ show fo++"\n") undefined
+evalFormula ev va fo = trace ("[ev] " @@ ev @@ "\n[va] " @@ va @@ "\n[fo] " @@ fo @@ "\n") undefined
 
 getRef :: Evaluator -> XlCells -> XlValues -> XlRC -> (XlValue, XlValues)
 getRef ev cells values ref' =
