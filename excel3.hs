@@ -158,6 +158,34 @@ instance Show Evaluator where
 
 updateRC ev v vs = (v, Map.insert (rc ev) v vs)
 
+binOp :: (Double -> Double -> Double) -> Evaluator -> XlValues -> XlFormula -> XlFormula -> (XlValue, XlValues)
+binOp op ev values a b =
+   let
+      (va, values')  = checkNumber $ (scalar ev) ev values  a
+      (vb, values'') = checkNumber $ (scalar ev) ev values' b
+      
+      doOp e@(XlError _) _               = e
+      doOp _             e@(XlError _)   = e
+      doOp (XlNumber na) (XlNumber nb)   = XlNumber (op na nb)
+      doOp _             _               = XlError "#VALUE!"
+      
+      val = doOp va vb
+   in
+      updateRC ev val values''
+
+unOp :: (Double -> Double) -> Evaluator -> XlValues -> XlFormula -> (XlValue, XlValues)
+unOp op ev values v =
+   let
+      (v', values') = checkNumber $ (scalar ev) ev values v
+      
+      doAbs e@(XlError _) = e
+      doAbs (XlNumber n)  = XlNumber $ sqrt n
+      doAbs _             = XlError "#VALUE!"
+      
+      val = doAbs v'
+   in
+      updateRC ev val values'
+
 evalFormula :: Evaluator -> XlValues -> XlFormula -> (XlValue, XlValues)
 
 evalFormula ev values (XlRng from to) = 
@@ -199,6 +227,7 @@ evalFormula ev values (XlFun "INDIRECT" [addr]) =
       (va, valuesa) = checkString $ (scalar ev) ev values addr
       (vr, valuesr) = 
          case va of
+            XlError e  -> (va, valuesa)
             XlString s -> (scalar ev) ev valuesa (convert s)
             _          -> ((XlError "#VALUE!"), valuesa)
    in
@@ -211,22 +240,14 @@ evalFormula ev values (XlFun "MID" [vstr, vstart, vlen]) =
       (vlen',   values3) = checkNumber $ (scalar ev) ev values2 vlen
       
       doMid (XlString str) (XlNumber start) (XlNumber len) = XlString $ take (floor len) $ drop (floor start - 1) str
-      doMid a b c = XlError "#VALUE!"
+      doMid _ _ _ = XlError "#VALUE!"
       
       val = doMid vstr' vstart' vlen'
    in
       updateRC ev val values3
 
-evalFormula ev values (XlFun "ABS" [v]) =
-   let
-      (v', values') = checkNumber $ (scalar ev) ev values v
-      
-      doAbs (XlNumber n)  = XlNumber $ abs n
-      doAbs _             = XlError "#VALUE!"
-      
-      val = doAbs v'
-   in
-      updateRC ev val values'
+evalFormula ev values (XlFun "SQRT" [v]) = unOp sqrt ev values v
+evalFormula ev values (XlFun "ABS"  [v]) = unOp abs  ev values v
 
 evalFormula ev values (XlFun "SUM" inputs) =
    let
@@ -246,6 +267,7 @@ evalFormula ev values (XlFun "SUM" inputs) =
                   (vi, valuesi) = (array ev) ev valuesacc input
                   vsum =
                      case vi of
+                        XlError _    -> vi
                         XlMatrix mtx -> foldl' (foldl' doSum) acc mtx
                         XlBoolean b  -> doSum acc vi
                         XlNumber n   -> doSum acc vi
@@ -255,19 +277,8 @@ evalFormula ev values (XlFun "SUM" inputs) =
    in
       updateRC ev vr valuesr
 
-evalFormula ev values (XlFun "+" [a, b]) =
-   let
-      (va, values')  = checkNumber $ (scalar ev) ev values  a
-      (vb, values'') = checkNumber $ (scalar ev) ev values' b
-      
-      doSum e@(XlError _) _               = e
-      doSum _             e@(XlError _)   = e
-      doSum (XlNumber na) (XlNumber nb)   = XlNumber (na + nb)
-      doSum _             _               = XlError "#VALUE!"
-      
-      val = doSum va vb
-   in
-      updateRC ev val values''
+evalFormula ev values (XlFun "+" [a, b]) = binOp (+) ev values a b
+evalFormula ev values (XlFun "*" [a, b]) = binOp (*) ev values a b
 
 evalFormula ev values (XlFun "&" [a, b]) =
    let
@@ -368,7 +379,9 @@ calcCell visiting cells values myRC@(XlRC (XlAbs r) (XlAbs c)) (XlCell formula) 
       -- 1) Evaluation as an implicit intersection of the argument with the expression's evaluation position.
       -- 1.1) Inline Arrays
       -- Element (0;0) of the array is used in the place of the array.
-      toScalar (XlLit (XlMatrix mtx)) = XlLit (head (head mtx))
+      toScalar (XlLit (XlMatrix []))   = XlLit (XlNumber 0) -- undocumented behavior of LibreOffice
+      toScalar (XlLit (XlMatrix [[]])) = XlLit (XlNumber 0) -- undocumented behavior of LibreOffice
+      toScalar (XlLit (XlMatrix mtx))  = XlLit (head (head mtx))
       
       -- 1.2) References
       toScalar (XlRng rcFrom rcTo) =
@@ -445,7 +458,7 @@ calcCell visiting cells values myRC (XlAFCell formula (x, y)) = (scalar ev) ev v
          else if sizeY == 1 && sizeX > x
          then getXY x 0
          -- 2.1.4) If none of the other rules apply #N/A
-         else XlLit $ XlError "#N/A!"
+         else XlLit $ XlError "#N/A"
 
       toScalar (XlLit (XlMatrix mtx)) =
          displayRule (foldr max 0 (map length mtx)) (length mtx) (\x y -> XlLit $ mtx !! y !! x)
@@ -592,8 +605,8 @@ main =
          -- 3.3 2 2.1 2.1.4) Note 5.3
          runTest [
             ( XlAddArrayFormula (toRC "A1") (toRC "C4") (nummtx [[1,2],[3,4],[5,6]]), XlNumber 1 ),
-            ( XlAddFormula (toRC "D1") (XlRef (toRC "C1")), XlError "#N/A!" ),
-            ( XlAddFormula (toRC "D2") (XlRef (toRC "A4")), XlError "#N/A!" )
+            ( XlAddFormula (toRC "D1") (XlRef (toRC "C1")), XlError "#N/A" ),
+            ( XlAddFormula (toRC "D2") (XlRef (toRC "A4")), XlError "#N/A" )
             ]
          -- 3.3 2 2.1 2.1.4) Note 6
          runTest [
@@ -611,7 +624,7 @@ main =
             ( XlAddArrayFormula (toRC "A1") (toRC "C1") (XlFun "+" [nummtx [[1,2]], nummtx [[3,4,5]]]), XlNumber 4 ),
             ( XlAddFormula (toRC "A2") (ref "A1"), XlNumber 4 ),
             ( XlAddFormula (toRC "B2") (ref "B1"), XlNumber 6 ),
-            ( XlAddFormula (toRC "C2") (ref "C1"), XlError "#N/A!" )
+            ( XlAddFormula (toRC "C2") (ref "C1"), XlError "#N/A" )
             ]
          -- 3.3 2 2.2 2.2.1) Note 8.2
          runTest [
@@ -669,4 +682,55 @@ main =
             ( XlAddFormula (toRC "A2") (ref "A1"), XlString "a" ),
             ( XlAddFormula (toRC "B2") (ref "B1"), XlString "bc" ),
             ( XlAddFormula (toRC "C2") (ref "C1"), XlError "#VALUE!" )
+            ]
+
+         -- ISO/IEC 29500:1 2012 page 2040 ex.1
+         runTest [
+            ( XlAddFormula (toRC "B2") (num 1), XlNumber 1),
+            ( XlAddFormula (toRC "B3") (num 2), XlNumber 2),
+            ( XlAddFormula (toRC "B4") (num 3), XlNumber 3),
+            ( XlAddFormula (toRC "C2") (num 4), XlNumber 4),
+            ( XlAddFormula (toRC "C3") (num 5), XlNumber 5),
+            ( XlAddFormula (toRC "C4") (num 6), XlNumber 6),
+            ( XlAddArrayFormula (toRC "D2") (toRC "D4") (XlFun "+" [XlFun "*" [range "B2" "B4", range "C2" "C4"], num 10.5]), XlNumber 14.5),
+            ( XlAddFormula (toRC "E2") (ref "D2"), XlNumber 14.5 ),
+            ( XlAddFormula (toRC "E3") (ref "D3"), XlNumber 20.5 ),
+            ( XlAddFormula (toRC "E4") (ref "D4"), XlNumber 28.5 )
+            ]
+
+         -- ISO/IEC 29500:1 2012 page 2040 exs.2 and 3
+         runTest [
+            ( XlAddFormula (toRC "A1") (XlFun "SQRT" [nummtx [[1,2,3,4]]]), XlNumber 1 ),
+            ( XlAddArrayFormula (toRC "B1") (toRC "B1") (XlFun "SQRT" [nummtx [[1,2,3,4]]]), XlNumber 1 ),
+            ( XlAddArrayFormula (toRC "C1") (toRC "G1") (XlFun "SQRT" [nummtx [[1,2,3,4]]]), XlNumber 1 ),
+            ( XlAddFormula (toRC "C2") (ref "C1"), XlNumber (sqrt 1)),
+            ( XlAddFormula (toRC "D2") (ref "D1"), XlNumber (sqrt 2)),
+            ( XlAddFormula (toRC "E2") (ref "E1"), XlNumber (sqrt 3)),
+            ( XlAddFormula (toRC "F2") (ref "F1"), XlNumber (sqrt 4)),
+            ( XlAddFormula (toRC "G2") (ref "G1"), XlError "#N/A")
+            ]
+
+         -- ISO/IEC 29500:1 2012 page 2040 ex.4
+         runTest [
+            ( XlAddFormula (toRC "A1") (XlFun "SUM" [XlFun "SQRT" [nummtx [[1,2,3,4]]]]), XlNumber 1 ) -- ((sqrt 1)+(sqrt 2)+(sqrt 3)+(sqrt 4))
+            ]
+
+         runTest [
+            ( XlAddFormula      (toRC "A1")             (XlFun "SUM" [XlFun "SQRT" [nummtx [[1,2,3,4]]]]), XlNumber 1 ),
+            ( XlAddArrayFormula (toRC "A2") (toRC "A2") (XlFun "SUM" [XlFun "SQRT" [nummtx [[1,2,3,4]]]]), XlNumber 1 ),
+            ( XlAddArrayFormula (toRC "B1") (toRC "E1") (XlFun "SUM" [XlFun "SQRT" [nummtx [[1,2,3,4]]]]), XlNumber 1 ),
+            ( XlAddArrayFormula (toRC "A3") (toRC "D3") (XlFun "SUM" [XlFun "+" [nummtx [[1,2,3,4]], num 100]]), XlNumber 101 ),
+            ( XlAddFormula (toRC "A4") (XlFun "SUM" [XlFun "+" [nummtx [[1,2,3,4]], num 100]]), XlNumber 101 ) -- 410
+            ]
+
+         runTest [
+            ( XlAddFormula      (toRC "A1")             (num 1), XlNumber 1 ),
+            ( XlAddFormula      (toRC "A2")             (num 2), XlNumber 2 ),
+            ( XlAddFormula      (toRC "A3")             (num 3), XlNumber 3 ),
+            ( XlAddFormula      (toRC "A4")             (num 4), XlNumber 4 ),
+            
+            ( XlAddFormula      (toRC "B5")             (XlFun "SUM" [XlFun "+" [nummtx [[1,2,3,4]], num 100]]), XlNumber 410 ),
+            ( XlAddArrayFormula (toRC "B6") (toRC "B6") (XlFun "SUM" [XlFun "+" [nummtx [[1,2,3,4]], num 100]]), XlNumber 410 ),
+            ( XlAddFormula      (toRC "B7")             (XlFun "SUM" [XlFun "+" [range "A1" "A4", num 100]]), XlError "#VALUE!" ),
+            ( XlAddArrayFormula (toRC "B8") (toRC "B8") (XlFun "SUM" [XlFun "+" [range "A1" "A4", num 100]]), XlNumber 410 )
             ]
