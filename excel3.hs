@@ -204,6 +204,19 @@ evalFormula ev values (XlFun "INDIRECT" [addr]) =
    in
       updateRC ev vr valuesr
 
+evalFormula ev values (XlFun "MID" [vstr, vstart, vlen]) =
+   let
+      (vstr',   values1) = checkString $ (scalar ev) ev values  vstr
+      (vstart', values2) = checkNumber $ (scalar ev) ev values1 vstart
+      (vlen',   values3) = checkNumber $ (scalar ev) ev values2 vlen
+      
+      doMid (XlString str) (XlNumber start) (XlNumber len) = XlString $ take (floor len) $ drop (floor start - 1) str
+      doMid a b c = XlError "#VALUE!"
+      
+      val = doMid vstr' vstart' vlen'
+   in
+      updateRC ev val values3
+
 evalFormula ev values (XlFun "ABS" [v]) =
    let
       (v', values') = checkNumber $ (scalar ev) ev values v
@@ -215,9 +228,8 @@ evalFormula ev values (XlFun "ABS" [v]) =
    in
       updateRC ev val values'
 
-evalFormula ev values (XlFun "SUM" [rng]) =
+evalFormula ev values (XlFun "SUM" inputs) =
    let
-      (vrng, values') = (array ev) ev values rng
       
       doSum e@(XlError _)  _              = e
       doSum _              e@(XlError _)  = e
@@ -227,12 +239,21 @@ evalFormula ev values (XlFun "SUM" [rng]) =
       doSum (XlNumber n)   (XlBoolean b)  = XlNumber (bool2num b + n)
       doSum (XlNumber a)   (XlNumber b)   = XlNumber (a + b)
       
-      val = 
-         case vrng of
-            XlMatrix mtx -> foldl' (foldl' doSum) (XlNumber 0) mtx
-            _            -> XlError "#VALUE!"
+      (vr, valuesr) = foldl' handle (XlNumber 0, values) inputs
+         where
+            handle (acc, valuesacc) input =
+               let
+                  (vi, valuesi) = (array ev) ev valuesacc input
+                  vsum =
+                     case vi of
+                        XlMatrix mtx -> foldl' (foldl' doSum) acc mtx
+                        XlBoolean b  -> doSum acc vi
+                        XlNumber n   -> doSum acc vi
+                        _            -> XlError "#VALUE!"
+               in
+                  (vsum, valuesi)
    in
-      updateRC ev val values'
+      updateRC ev vr valuesr
 
 evalFormula ev values (XlFun "+" [a, b]) =
    let
@@ -407,21 +428,22 @@ calcCell visiting cells values myRC (XlAFCell formula (x, y)) = (scalar ev) ev v
       -- 2.1) The portion of a non-scalar result to be displayed need not be co-extensive with a
       -- specified display area. The portion of the non-scalar result to be displayed is
       -- determined by:
-
-
       displayRule :: Int -> Int -> (Int -> Int -> XlFormula) -> XlFormula
       displayRule sizeX sizeY getXY =
          -- 2.1.1) If the position to be displayed exists in the result, display that position.
          if sizeY > y && sizeX > x
          then getXY x y
+         -- [Rules 2.1.2 and 2.1.3 apply to singletons]
+         else if sizeX == 1 && sizeY == 1
+         then getXY 0 0
          -- 2.1.2) If the non-scalar result is 1 column wide, subsequent columns in the display
          -- area display the value in the first column.
          else if sizeX == 1 && sizeY > y
-         then getXY y 0
+         then getXY 0 y
          -- 2.1.3) If the non-scalar result is 1 row high, subsequent rows in the display area use
          -- the value of the first row.
          else if sizeY == 1 && sizeX > x
-         then getXY 0 x
+         then getXY x 0
          -- 2.1.4) If none of the other rules apply #N/A
          else XlLit $ XlError "#N/A!"
 
@@ -472,8 +494,8 @@ num n = XlLit (XlNumber n)
 
 nummtx mx = XlLit (XlMatrix (map (map XlNumber) mx))
 
-cell :: String -> XlFormula
-cell a1 = XlRef (toRC a1)
+ref :: String -> XlFormula
+ref a1 = XlRef (toRC a1)
 
 range :: String -> String -> XlFormula
 range a1 b2 = XlRng (toRC a1) (toRC b2)
@@ -491,23 +513,26 @@ main =
                where
                   doCheck (op, value) =
                      case op of
-                        XlAddFormula rc fml -> if trace (show rc) values ! rc == value then Nothing else Just rc
+                        XlAddFormula rc fml -> if values ! rc == value then Nothing else Just rc
                         XlAddArrayFormula rcFrom rcTo fml -> if values ! rcFrom == value then Nothing else Just rcFrom
          in do
             print env
             if null failures
-            then putStrLn "All passed!"
-            else print failures
+            then putStrLn "OK! :-D"
+            else
+               do
+                  putStrLn "****************** Failed: ******************"
+                  print failures
    in
       do
          runTest [
             ( XlAddFormula (toRC "A1") (num 15),                                      XlNumber 15 ),
             ( XlAddFormula (toRC "B1") (num 0),                                       XlNumber 15 ), -- final state
-            ( XlAddFormula (toRC "A2") (XlFun "+" [cell "A1", cell "B1"]),            XlNumber 30 ), -- final state
-            ( XlAddFormula (toRC "B1") (cell "A1"),                                   XlNumber 15 ),
+            ( XlAddFormula (toRC "A2") (XlFun "+" [ref "A1", ref "B1"]),              XlNumber 30 ), -- final state
+            ( XlAddFormula (toRC "B1") (ref "A1"),                                    XlNumber 15 ),
             ( XlAddFormula (toRC "C1") (str "B"),                                     XlString "B" ),
             ( XlAddFormula (toRC "C2") (num 1),                                       XlNumber 1 ),
-            ( XlAddFormula (toRC "B2") (XlFun "INDIRECT" [XlFun "&" [cell "C1", cell "C2"]]), XlNumber 15 ),
+            ( XlAddFormula (toRC "B2") (XlFun "INDIRECT" [XlFun "&" [ref "C1", ref "C2"]]), XlNumber 15 ),
             ( XlAddFormula (toRC "D1") (XlFun "SUM" [range "A1" "B2"]),              XlNumber 75 ),
             ( XlAddFormula (toRC "E1") (XlFun "SUM" [range "B1" "B2"]),              XlNumber 30 ),
             ( XlAddFormula (toRC "F1") (XlFun "SUM" [range "D1" "E1"]),              XlNumber 105 ),
@@ -520,17 +545,17 @@ main =
             
             ( XlAddFormula (toRC "A10") (num 10),                                    XlNumber 10 ),
             ( XlAddFormula (toRC "A11") (str "10"),                                  XlString "10" ),
-            ( XlAddFormula (toRC "A12") (XlFun "=" [cell "A10", cell "A11"]),        XlBoolean False ),
-            ( XlAddFormula (toRC "A13") (XlFun "=" [cell "A10", num 10]),            XlBoolean True ),
-            ( XlAddFormula (toRC "A14") (XlFun "=" [cell "A13", num 1]),             XlBoolean True ),
+            ( XlAddFormula (toRC "A12") (XlFun "=" [ref "A10", ref "A11"]),          XlBoolean False ),
+            ( XlAddFormula (toRC "A13") (XlFun "=" [ref "A10", num 10]),             XlBoolean True ),
+            ( XlAddFormula (toRC "A14") (XlFun "=" [ref "A13", num 1]),              XlBoolean True ),
    
             ( XlAddFormula (toRC "A15") (XlFun "/" [num 1, num 0]),                  XlError "#DIV/0!" ),
-            ( XlAddFormula (toRC "A16") (XlFun "=" [cell "K2", cell "A15"]),         XlError "#VALUE!" ),
-            ( XlAddFormula (toRC "A17") (XlFun "=" [cell "A15", cell "K2"]),         XlError "#DIV/0!" ),
+            ( XlAddFormula (toRC "A16") (XlFun "=" [ref "K2", ref "A15"]),           XlError "#VALUE!" ),
+            ( XlAddFormula (toRC "A17") (XlFun "=" [ref "A15", ref "K2"]),           XlError "#DIV/0!" ),
 
             ( XlAddFormula (toRC "G1") (XlFun "+" [num 1000, range "A1" "A2"]),      XlNumber 1015 ),
 
-            ( XlAddFormula (toRC "C5") (range "A1" "A2"),                              XlError "#VALUE!" ),
+            ( XlAddFormula (toRC "C5") (range "A1" "A2"),                            XlError "#VALUE!" ),
             ( XlAddArrayFormula (toRC "F5") (toRC "F6") (nummtx [[15], [16]]), XlNumber 15 ),
             ( XlAddArrayFormula (toRC "D5") (toRC "D6") (XlFun "+" [range "A1" "A2", num 100]), XlNumber 115 )
             ]
@@ -549,8 +574,99 @@ main =
             ( XlAddFormula (toRC "B2") (XlFun "ABS" [range "A1" "C1"]), XlNumber 20 ),
             ( XlAddFormula (toRC "D4") (XlFun "ABS" [range "A1" "C1"]), XlError "#VALUE!" )
             ]
-         -- 3.3 2 2.1 2.1.4) Note 5
+         -- 3.3 2 2.1 2.1.4) Note 5.1
          runTest [
             ( XlAddArrayFormula (toRC "A1") (toRC "B3") (nummtx [[1,2],[3,4],[5,6]]), XlNumber 1 ),
+            ( XlAddFormula (toRC "C3") (ref "B2"), XlNumber 4 )
+            ]
+         -- 3.3 2 2.1 2.1.4) Note 5.2
+         runTest [
+            ( XlAddArrayFormula (toRC "A1") (toRC "B3") (nummtx [[1],[3],[5]]), XlNumber 1 ),
+            ( XlAddFormula (toRC "C3") (ref "B2"), XlNumber 3 )
+            ]
+         -- 3.3 2 2.1 2.1.4) Note 5.3
+         runTest [
+            ( XlAddArrayFormula (toRC "A1") (toRC "B3") (nummtx [[2,4]]), XlNumber 2 ),
             ( XlAddFormula (toRC "C3") (XlRef (toRC "B2")), XlNumber 4 )
+            ]
+         -- 3.3 2 2.1 2.1.4) Note 5.3
+         runTest [
+            ( XlAddArrayFormula (toRC "A1") (toRC "C4") (nummtx [[1,2],[3,4],[5,6]]), XlNumber 1 ),
+            ( XlAddFormula (toRC "D1") (XlRef (toRC "C1")), XlError "#N/A!" ),
+            ( XlAddFormula (toRC "D2") (XlRef (toRC "A4")), XlError "#N/A!" )
+            ]
+         -- 3.3 2 2.1 2.1.4) Note 6
+         runTest [
+            ( XlAddArrayFormula (toRC "A1") (toRC "B2") (nummtx [[1,2],[3,4],[5,6]]), XlNumber 1 ),
+            ( XlAddFormula (toRC "D1") (XlRef (toRC "B3")), XlNumber 0 )
+            ]
+         -- 3.3 2 2.2 2.2.1) Note 7
+         runTest [
+            ( XlAddFormula (toRC "A1") (num 10), XlNumber 10 ),
+            ( XlAddFormula (toRC "A2") (num 20), XlNumber 20 ),
+            ( XlAddArrayFormula (toRC "A3") (toRC "A3") (XlFun "SUM" [XlFun "INDIRECT" [XlLit (XlMatrix [[XlString "A1", XlString "A2"]])]]), XlNumber 10 )
+            ]
+         -- 3.3 2 2.2 2.2.1) Note 8.1
+         runTest [
+            ( XlAddArrayFormula (toRC "A1") (toRC "C1") (XlFun "+" [nummtx [[1,2]], nummtx [[3,4,5]]]), XlNumber 4 ),
+            ( XlAddFormula (toRC "A2") (ref "A1"), XlNumber 4 ),
+            ( XlAddFormula (toRC "B2") (ref "B1"), XlNumber 6 ),
+            ( XlAddFormula (toRC "C2") (ref "C1"), XlError "#N/A!" )
+            ]
+         -- 3.3 2 2.2 2.2.1) Note 8.2
+         runTest [
+            ( XlAddArrayFormula (toRC "A1") (toRC "B1") (XlFun "+" [nummtx [[1]], nummtx [[1,2]]]), XlNumber 2 ),
+            ( XlAddFormula (toRC "A2") (ref "A1"), XlNumber 2 ),
+            ( XlAddFormula (toRC "B2") (ref "B1"), XlNumber 3 )
+            ]
+         -- 3.3 2 2.2 2.2.3 2.2.3.1) Note 9.1
+         runTest [
+            ( XlAddArrayFormula (toRC "A1") (toRC "C2") (XlFun "+" [num 1, nummtx [[1,2,3],[4,5,6]]]), XlNumber 2 ),
+            ( XlAddFormula (toRC "D1") (ref "A1"), XlNumber 2 ),
+            ( XlAddFormula (toRC "E1") (ref "B1"), XlNumber 3 ),
+            ( XlAddFormula (toRC "F1") (ref "C1"), XlNumber 4 ),
+            ( XlAddFormula (toRC "D2") (ref "A2"), XlNumber 5 ),
+            ( XlAddFormula (toRC "E2") (ref "B2"), XlNumber 6 ),
+            ( XlAddFormula (toRC "F2") (ref "C2"), XlNumber 7 )
+            ]
+         -- 3.3 2 2.2 2.2.3 2.2.3.1) Note 9.2
+         runTest [
+            ( XlAddArrayFormula (toRC "A1") (toRC "C2") (XlFun "+" [nummtx [[1]], nummtx [[1,2,3],[4,5,6]]]), XlNumber 2 ),
+            ( XlAddFormula (toRC "D1") (ref "A1"), XlNumber 2 ),
+            ( XlAddFormula (toRC "E1") (ref "B1"), XlNumber 3 ),
+            ( XlAddFormula (toRC "F1") (ref "C1"), XlNumber 4 ),
+            ( XlAddFormula (toRC "D2") (ref "A2"), XlNumber 5 ),
+            ( XlAddFormula (toRC "E2") (ref "B2"), XlNumber 6 ),
+            ( XlAddFormula (toRC "F2") (ref "C2"), XlNumber 7 )
+            ]
+         -- 3.3 2 2.2 2.2.3 2.2.3.1) Note 10
+         runTest [
+            ( XlAddArrayFormula (toRC "A1") (toRC "B2") (XlFun "+" [nummtx [[1],[2]], nummtx [[10,20],[30,40]]]), XlNumber 11 ),
+            ( XlAddFormula (toRC "D1") (ref "A1"), XlNumber 11 ),
+            ( XlAddFormula (toRC "E1") (ref "B1"), XlNumber 21 ),
+            ( XlAddFormula (toRC "D2") (ref "A2"), XlNumber 32 ),
+            ( XlAddFormula (toRC "E2") (ref "B2"), XlNumber 42 )
+            ]
+         -- 3.3 2 2.2 2.2.3 2.2.3.1) Note 11
+         runTest [
+            ( XlAddArrayFormula (toRC "A1") (toRC "B2") (XlFun "+" [nummtx [[1,2]], nummtx [[10,20],[30,40]]]), XlNumber 11 ),
+            ( XlAddFormula (toRC "D1") (ref "A1"), XlNumber 11 ),
+            ( XlAddFormula (toRC "E1") (ref "B1"), XlNumber 22 ),
+            ( XlAddFormula (toRC "D2") (ref "A2"), XlNumber 31 ),
+            ( XlAddFormula (toRC "E2") (ref "B2"), XlNumber 42 )
+            ]
+         -- 3.3 2 2.2 2.2.3 2.2.3.1) Note 12
+         runTest [
+            ( XlAddArrayFormula (toRC "A1") (toRC "B2") (XlFun "+" [nummtx [[1,2]], nummtx [[10],[20]]]), XlNumber 11 ),
+            ( XlAddFormula (toRC "D1") (ref "A1"), XlNumber 11 ),
+            ( XlAddFormula (toRC "E1") (ref "B1"), XlNumber 12 ),
+            ( XlAddFormula (toRC "D2") (ref "A2"), XlNumber 21 ),
+            ( XlAddFormula (toRC "E2") (ref "B2"), XlNumber 22 )
+            ]
+         -- 3.3 2 2.2 2.2.3 2.2.3.1) Note 13
+         runTest [
+            ( XlAddArrayFormula (toRC "A1") (toRC "C1") (XlFun "MID" [str "abcd", nummtx [[1,2]], nummtx [[1,2,3]]]), XlString "a" ),
+            ( XlAddFormula (toRC "A2") (ref "A1"), XlString "a" ),
+            ( XlAddFormula (toRC "B2") (ref "B1"), XlString "bc" ),
+            ( XlAddFormula (toRC "C2") (ref "C1"), XlError "#VALUE!" )
             ]
