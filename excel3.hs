@@ -178,11 +178,11 @@ unOp op ev values v =
    let
       (v', values') = checkNumber $ (scalar ev) ev values v
       
-      doAbs e@(XlError _) = e
-      doAbs (XlNumber n)  = XlNumber $ op n
-      doAbs _             = XlError "#VALUE!"
+      doOp e@(XlError _) = e
+      doOp (XlNumber n)  = XlNumber $ op n
+      doOp _             = XlError "#VALUE!"
       
-      val = doAbs v'
+      val = doOp v'
    in
       updateRC ev val values'
 
