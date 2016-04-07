@@ -1,5 +1,5 @@
 
-import Data.Map.Strict as Map (Map, empty, elems, mapWithKey, foldrWithKey, member, insert, lookup, toList, (!))
+import Data.Map.Strict as Map (Map, empty, elems, mapWithKey, foldlWithKey, member, insert, lookup, toList, (!))
 import Data.List (foldl')
 import Data.Tree (flatten)
 import Data.Char (ord, chr)
@@ -8,7 +8,7 @@ import Debug.Trace
 import Data.Fixed
 import Text.PrettyPrint.Boxes as Box (render, hcat, vcat, text)
 import Text.PrettyPrint.Boxes as Alignment (left, right)
-import ShowConcat ((@@))
+import ShowConcat ((@@), (@@@))
 
 data XlValue = XlNumber Double
              | XlString String
@@ -64,12 +64,19 @@ type XlValues = Map.Map XlRC XlValue
 
 data XlEnv = XlEnv XlCells XlValues
 
+tsi :: Show a => a -> a
+--tsi = traceShowId
+--trc = trace
+
+tsi = id
+trc m = id
+
 instance Show XlEnv where
    show (XlEnv cells values) = 
       "\nCells:\n" @@ listCells @@ "\nValues:\n" @@ tableValues @@ "\n" @@ values @@ "\n"
          where
-            maxRow = Map.foldrWithKey (\(XlRC (XlAbs r) _) _ mx -> max r mx) 0 values
-            maxCol = Map.foldrWithKey (\(XlRC _ (XlAbs c)) _ mx -> max c mx) 0 values
+            maxRow = Map.foldlWithKey (\mx (XlRC (XlAbs r) _) _ -> max r mx) 0 values
+            maxCol = Map.foldlWithKey (\mx (XlRC _ (XlAbs c)) _ -> max c mx) 0 values
             listCells   = Box.render $ Box.vcat Alignment.left $ map Box.text $ map show (Map.toList cells)
             tableValues = Box.render $ Box.hcat Alignment.left $ numbersColumn : map doColumn [0..maxCol]
                where 
@@ -86,14 +93,14 @@ instance Show XlEnv where
                                  Just (XlNumber n)  -> lpad 11 (toString n)
                                  Just v             -> show v
                                  Nothing            -> ""
-            
+
 toAbs :: XlRC -> XlRC -> XlRC
 toAbs base@(XlRC br bc) cell@(XlRC cr cc) = XlRC (toAbsAddr br cr) (toAbsAddr bc cc)
    where 
       toAbsAddr :: XlAddr -> XlAddr -> XlAddr
       toAbsAddr _ a@(XlAbs _) = a
       toAbsAddr (XlAbs aa) (XlRel rr) = XlAbs (aa + rr)
-      toAbsAddr base@(XlRel _) _ = error ("base in toAbs must be absolute, got " @@ base) 
+      toAbsAddr base@(XlRel _) _ = error ("base in toAbs must be absolute, got" @@@ base) 
 
 -- Converts Excel addresses in "A1" format to internal RC format.
 -- Supports only rows A-Z, and absolute addresses.
@@ -106,15 +113,22 @@ toString n =
       then show n
       else show (floor n)
 
---foldRange :: XlRC -> XlRC -> XlRC -> rowAcc -> (rowAcc -> cellAcc) -> (cellAcc -> XlRC -> cellAcc) -> (rowAcc -> Int -> cellAcc -> rowAcc) -> rowAcc
-foldRange rc from to zero zeroRow cellOp rowOp =
+getRCs :: XlRC -> XlRC -> XlRC -> (Int, Int, Int, Int)
+getRCs myRC rcFrom rcTo =
    let
-      (XlRC (XlAbs fromR) (XlAbs fromC)) = toAbs rc from
-      (XlRC (XlAbs toR)   (XlAbs toC))   = toAbs rc to
+      XlRC (XlAbs fromR) (XlAbs fromC) = toAbs myRC rcFrom
+      XlRC (XlAbs toR)   (XlAbs toC)   = toAbs myRC rcTo
       minR = min fromR toR
       maxR = max fromR toR
       minC = min fromC toC
       maxC = max fromC toC
+   in
+      (minR, minC, maxR, maxC)
+
+--foldRange :: XlRC -> XlRC -> XlRC -> rowAcc -> (rowAcc -> cellAcc) -> (cellAcc -> XlRC -> cellAcc) -> (rowAcc -> Int -> cellAcc -> rowAcc) -> rowAcc
+foldRange rc from to zero zeroRow cellOp rowOp =
+   let
+      (minR, minC, maxR, maxC) = getRCs rc from to
       --handleRow :: rowAcc -> Int -> rowAcc
       handleRow accRow r = rowOp accRow r rowRes
          where
@@ -148,13 +162,16 @@ checkString (v, vs) = (coerce v, vs)
 
 data Evaluator = Evaluator {
    rc :: XlRC,
+   xy :: (Int, Int),
    visiting :: Set XlRC,
+   cells :: XlCells,
+   toScalar :: XlRC -> Int -> Int -> XlFormula -> XlFormula,
    array  :: Evaluator -> XlValues -> XlFormula -> (XlValue, XlValues),
    scalar :: Evaluator -> XlValues -> XlFormula -> (XlValue, XlValues)
 }
 
 instance Show Evaluator where
-   show ev = "Evaluator\nRC: " @@ rc ev @@ "\nVisiting: " @@ visiting ev @@ "\n"
+   show ev = "Evaluator\nRC:" @@@ rc ev @@ "\nVisiting:" @@@ visiting ev @@ "\n"
 
 updateRC ev v vs = (v, Map.insert (rc ev) v vs)
 
@@ -329,10 +346,10 @@ evalFormula ev values (XlFun "=" [a, b]) =
    in
       updateRC ev val values''
 
-evalFormula ev va fo = trace ("[ev] " @@ ev @@ "\n[va] " @@ va @@ "\n[fo] " @@ fo @@ "\n") undefined
+evalFormula ev va fo = trc ("[ev]" @@@ ev @@ "\n[va]" @@@ va @@ "\n[fo]" @@@ fo @@ "\n") undefined
 
-getRef :: Evaluator -> XlCells -> XlValues -> XlRC -> (XlValue, XlValues)
-getRef ev cells values ref' =
+getRef :: Evaluator -> XlValues -> XlRC -> (XlValue, XlValues)
+getRef ev values ref' =
    let
       ref = toAbs (rc ev) ref'
       give val = (val, Map.insert (rc ev) val values)
@@ -343,51 +360,114 @@ getRef ev cells values ref' =
          case Map.lookup ref values of
             Just v  -> give v
             Nothing ->
-               case Map.lookup ref cells of
-                  Just cell -> give $ fst $ calcCell (Set.insert ref (visiting ev)) cells values ref cell
+               case Map.lookup ref (cells ev) of
+                  Just cell -> give $ fst $ calcCell (Set.insert ref (visiting ev)) (cells ev) values ref cell
                   Nothing -> give (XlNumber 0)
 
-calcCell :: Set XlRC -> XlCells -> XlValues -> XlRC -> XlCell -> (XlValue, XlValues)
-calcCell visiting cells values myRC@(XlRC (XlAbs r) (XlAbs c)) (XlCell formula) = (scalar ev) ev values formula
-   where
-   
-      ev = Evaluator {
-         rc = myRC,
-         visiting = visiting,
-         scalar = scalarEvaluator,
-         array = arrayEvaluator
-      }
-      
-      arrayEvaluator ev values formula =
-         case formula of
-            XlLit v -> updateRC ev v values
-            XlRef ref -> getRef ev cells values ref
-            _ -> evalFormula ev values formula
-         
-      -- NOTE that we can't just evaluate a range to a matrix and convert to scalar,
-      -- because explicit ranges are converted via intersection.
-      scalarEvaluator ev values formula =
-         let
-            formula' = toScalar formula
-         in
-            case formula' of
-               XlLit v -> updateRC ev v values
-               XlRef ref -> getRef ev cells values ref
-               _ -> evalFormula ev values formula'
+scalarFunction "SUM" = False
+--scalarFunction "INDIRECT" = False
+scalarFunction _ = True
 
-      -- 3.3) Non-Scalar Evaluation (aka 'Array expressions') [page 27]
-      -- 1) Evaluation as an implicit intersection of the argument with the expression's evaluation position.
-      -- 1.1) Inline Arrays
-      -- Element (0;0) of the array is used in the place of the array.
-      toScalar (XlLit (XlMatrix []))   = XlLit (XlNumber 0) -- undocumented behavior of LibreOffice
-      toScalar (XlLit (XlMatrix [[]])) = XlLit (XlNumber 0) -- undocumented behavior of LibreOffice
-      toScalar (XlLit (XlMatrix mtx))  = XlLit (head (head mtx))
-      
-      -- 1.2) References
-      toScalar (XlRng rcFrom rcTo) =
+iterateFormula :: Evaluator -> XlValues -> XlFormula -> (XlValue, XlValues)
+iterateFormula ev values (XlFun name args) =
+   trc ("iterateFormula:" @@@ maxX @@@ "Y:" @@@ maxY) $
+   if maxX > 1 || maxY > 1
+   then (\(m, v) -> (XlMatrix m, v)) $ foldl doRow ([], values) [0..maxY-1]
+   else (scalar ev) ev values (XlFun name args)
+   where
+      XlRC (XlAbs y) (XlAbs x) = rc ev
+      maxY :: Int
+      maxY = foldl getY 1 args
+         where
+            getY mx (XlLit (XlMatrix mtx)) = max mx (length mtx)
+            getY mx (XlRng rcFrom rcTo) = max mx (1 + toR - fromR)
+               where
+                  (fromR, fromC, toR, toC) = getRCs (rc ev) rcFrom rcTo
+            getY mx _ = mx
+      maxX :: Int
+      maxX = foldl getX 1 args
+         where
+            getX mx (XlLit (XlMatrix mtx)) = max mx (maxRowLength mtx)
+               where
+                  maxRowLength :: [[XlValue]] -> Int
+                  maxRowLength mtx = foldl (\mx' row -> max mx' (length row)) 1 mtx
+            getX mx (XlRng rcFrom rcTo) = max mx (1 + toC - fromC)
+               where
+                  (fromR, fromC, toR, toC) = getRCs (rc ev) rcFrom rcTo
+            getX mx _ = mx
+      doRow :: ([[XlValue]], XlValues) -> Int -> ([[XlValue]], XlValues)
+      doRow (mtx, values) y = appendTo mtx $ foldl doCell ([], values) [0..maxX-1]
+         where
+            doCell :: ([XlValue], XlValues) -> Int -> ([XlValue], XlValues)
+            doCell (row, values) x = appendTo row $ (scalar ev) ev values (XlFun name (
+               trc "converted:" $ tsi $
+               map ((toScalar ev) (rc ev) x y) args))
+            appendTo :: [a] -> (a, b) -> ([a], b)
+            appendTo xs (val, vals) = (val : xs, vals)
+
+matrixArrayEvaluator ev values formula =
+   trc ("matrixArrayEvaluator" @@@ formula) $ tsi $
+   case formula of
+      XlLit v -> updateRC ev v values
+      XlRef ref -> getRef ev values ref
+      -- XlFun name args | scalarFunction name -> iterateFormula ev values formula
+      -- _ -> evalFormula ev values formula
+      _ -> iterateFormula ev values formula
+
+simpleArrayEvaluator ev values formula =
+   trc ("simpleArrayEvaluator" @@@ formula) $ tsi $
+   case formula of
+      XlLit v -> updateRC ev v values
+      XlRef ref -> getRef ev values ref
+      _ -> evalFormula ev values formula
+
+-- NOTE that we can't just evaluate a range to a matrix and convert to scalar,
+-- because explicit ranges are converted via intersection.
+matrixScalarEvaluator ev values formula =
+   let
+      (x, y) = xy ev
+      formula' = (toScalar ev) (rc ev) x y formula
+   in
+      trc ("matrixScalarEvaluator" @@@ rc ev @@@ formula @@@ ">>>" @@@ formula') $
+      case formula' of
+         XlLit v -> updateRC ev v values
+         XlRef ref -> getRef ev values ref
+         _ -> evalFormula ev values formula'
+
+-- NOTE that we can't just evaluate a range to a matrix and convert to scalar,
+-- because explicit ranges are converted via intersection.
+simpleScalarEvaluator ev values formula =
+   let
+      (x, y) = xy ev
+      formula' = (toScalar ev) (rc ev) x y formula
+   in
+      trc ("simpleScalarEvaluator" @@@ rc ev @@@ formula @@@ ">>>" @@@ formula') $
+      case formula' of
+         XlLit v -> updateRC ev v values
+         XlRef ref -> getRef ev values ref
+         --XlFun name args | not $ scalarFunction name -> scalarize ev $ evalFormula ev{ xy = (0,0), scalar = matrixScalarEvaluator, array = matrixArrayEvaluator, toScalar = matrixToScalar } values formula'
+         _ -> evalFormula ev values formula'
+
+scalarize ev (value, values) =
+   trc "scalarize:" $ tsi $
+   (value', values)
+   where
+      (x, y) = xy ev
+      (XlLit value') = (toScalar ev) (rc ev) x y (XlLit value)
+
+-- 3.3) Non-Scalar Evaluation (aka 'Array expressions') [page 27]
+-- 1) Evaluation as an implicit intersection of the argument with the expression's evaluation position.
+-- 1.1) Inline Arrays
+-- Element (0;0) of the array is used in the place of the array.
+intersectScalar :: XlRC -> Int -> Int -> XlFormula -> XlFormula
+intersectScalar myRC@(XlRC (XlAbs r) (XlAbs c)) x y formula =
+   case formula of
+      XlLit (XlMatrix [])   -> XlLit (XlNumber 0) -- undocumented behavior of LibreOffice
+      XlLit (XlMatrix [[]]) -> XlLit (XlNumber 0) -- undocumented behavior of LibreOffice
+      XlLit (XlMatrix mtx)  -> XlLit (head (head mtx))
+      XlRng rcFrom rcTo ->
          let
-            XlRC (XlAbs fromR) (XlAbs fromC) = toAbs myRC rcFrom
-            XlRC (XlAbs toR)   (XlAbs toC)   = toAbs myRC rcTo
+            (fromR, fromC, toR, toC) = getRCs myRC rcFrom rcTo
          in
             -- 1.2.1) If the target reference is a row-vector (Nx1) use the value at the intersection of
             -- the evaluation position's column and the reference's row.
@@ -406,43 +486,30 @@ calcCell visiting cells values myRC@(XlRC (XlAbs r) (XlAbs c)) (XlCell formula) 
                else XlLit (XlError "#VALUE!")
             else
                XlLit (XlError "#VALUE!")
+      v -> v
 
-      toScalar v = v
+-- 2) Matrix evaluation
+-- If an expression is being evaluated in a cell flagged as a being part of a 'Matrix'
+-- (OpenDocument 8.1.3 table:number-matrix-columns-spanned):
 
-calcCell visiting cells values myRC (XlAFCell formula (x, y)) = (scalar ev) ev values formula
+matrixToScalar myRC x y formula =
+   trc "matrixToScalar:" $ tsi $
+   case formula of
+      XlLit (XlMatrix mtx) ->
+         trc ("mts Matrix" @@@ mtx @@@ x @@@ y) $ tsi $
+         displayRule x y (foldl' max 0 (map length mtx)) (length mtx) (\x y -> XlLit $ mtx !! y !! x)
+      XlRng rcFrom rcTo ->
+         trc ("mts Range" @@@ x @@@ y) $ tsi $
+         displayRule x y (1 + toC - fromC) (1 + toR - fromR) (\x y -> XlRef (XlRC (XlAbs (fromR + y)) (XlAbs (fromC + x))))
+            where 
+               (fromR, fromC, toR, toC) = getRCs myRC rcFrom rcTo
+      v -> v
    where
-   
-      ev = Evaluator {
-         rc = myRC,
-         visiting = visiting,
-         scalar = scalarEvaluator,
-         array = arrayEvaluator
-      }
-      
-      arrayEvaluator ev values formula =
-         case formula of
-            XlLit v -> updateRC ev v values
-            XlRef ref -> getRef ev cells values ref
-            _ -> evalFormula ev values formula
-
-      scalarEvaluator ev values formula =
-         let
-            formula' = toScalar formula
-         in
-            case formula' of
-               XlLit v -> updateRC ev v values
-               XlRef ref -> getRef ev cells values ref
-               _ -> evalFormula ev values formula'
-
-      -- 2) Matrix evaluation
-      -- If an expression is being evaluated in a cell flagged as a being part of a 'Matrix'
-      -- (OpenDocument 8.1.3 table:number-matrix-columns-spanned):
-
       -- 2.1) The portion of a non-scalar result to be displayed need not be co-extensive with a
       -- specified display area. The portion of the non-scalar result to be displayed is
       -- determined by:
-      displayRule :: Int -> Int -> (Int -> Int -> XlFormula) -> XlFormula
-      displayRule sizeX sizeY getXY =
+      displayRule :: Int -> Int -> Int -> Int -> (Int -> Int -> XlFormula) -> XlFormula
+      displayRule x y sizeX sizeY getXY =
          -- 2.1.1) If the position to be displayed exists in the result, display that position.
          if sizeY > y && sizeX > x
          then getXY x y
@@ -460,17 +527,30 @@ calcCell visiting cells values myRC (XlAFCell formula (x, y)) = (scalar ev) ev v
          -- 2.1.4) If none of the other rules apply #N/A
          else XlLit $ XlError "#N/A"
 
-      toScalar (XlLit (XlMatrix mtx)) =
-         displayRule (foldr max 0 (map length mtx)) (length mtx) (\x y -> XlLit $ mtx !! y !! x)
+calcCell :: Set XlRC -> XlCells -> XlValues -> XlRC -> XlCell -> (XlValue, XlValues)
+calcCell visiting cells values myRC@(XlRC (XlAbs r) (XlAbs c)) (XlCell formula) = (scalar ev) ev values formula
+   where
+      ev = Evaluator {
+         rc = myRC,
+         xy = (c, r),
+         cells = cells,
+         toScalar = intersectScalar,
+         visiting = visiting,
+         scalar = simpleScalarEvaluator,
+         array = simpleArrayEvaluator
+      }
 
-      toScalar (XlRng rcFrom rcTo) =
-         let
-            XlRC (XlAbs fromR) (XlAbs fromC) = toAbs myRC rcFrom
-            XlRC (XlAbs toR)   (XlAbs toC)   = toAbs myRC rcTo
-         in
-            displayRule (1 + toC - fromC) (1 + toR - fromR) (\x y -> XlRef (XlRC (XlAbs (fromR + y)) (XlAbs (fromC + x))))
-
-      toScalar v = v
+calcCell visiting cells values myRC (XlAFCell formula (x, y)) = (scalar ev) ev values formula
+   where
+      ev = Evaluator {
+         rc = myRC,
+         xy = (x, y),
+         cells = cells,
+         toScalar = matrixToScalar,
+         visiting = visiting,
+         scalar = matrixScalarEvaluator,
+         array = matrixArrayEvaluator
+      }
 
 updateCells cells event@(XlAddFormula rc formula) =
    Map.insert rc (XlCell formula) cells
@@ -489,13 +569,13 @@ run sheet@(XlWorksheet cells) events =
          let 
             newCells = updateCells cells event
             
-            acc :: XlRC -> XlCell -> XlValues -> XlValues
-            acc rc cell values =
+            acc :: XlValues -> XlRC -> XlCell -> XlValues
+            acc values rc cell =
                if Map.member rc values
                then values
                else snd $ calcCell (Set.singleton rc) newCells values rc cell
          in
-            XlEnv newCells (Map.foldrWithKey acc Map.empty newCells)
+            XlEnv newCells (Map.foldlWithKey acc Map.empty newCells)
 
    in foldl' runEvent (XlEnv cells Map.empty) events
 
@@ -526,8 +606,8 @@ main =
                where
                   doCheck (op, value) =
                      case op of
-                        XlAddFormula rc fml -> if values ! rc == value then Nothing else Just rc
-                        XlAddArrayFormula rcFrom rcTo fml -> if values ! rcFrom == value then Nothing else Just rcFrom
+                        XlAddFormula rc fml -> if values ! rc == value then Nothing else Just (rc, value)
+                        XlAddArrayFormula rcFrom rcTo fml -> if values ! rcFrom == value then Nothing else Just (rcFrom, value)
          in do
             print env
             if null failures
@@ -613,11 +693,28 @@ main =
             ( XlAddArrayFormula (toRC "A1") (toRC "B2") (nummtx [[1,2],[3,4],[5,6]]), XlNumber 1 ),
             ( XlAddFormula (toRC "D1") (XlRef (toRC "B3")), XlNumber 0 )
             ]
-         -- 3.3 2 2.2 2.2.1) Note 7
+         -- 3.3 2 2.2 2.2.1) Note 7 (oasis_note7.ods)
          runTest [
-            ( XlAddFormula (toRC "A1") (num 10), XlNumber 10 ),
-            ( XlAddFormula (toRC "A2") (num 20), XlNumber 20 ),
-            ( XlAddArrayFormula (toRC "A3") (toRC "A3") (XlFun "SUM" [XlFun "INDIRECT" [XlLit (XlMatrix [[XlString "A1", XlString "A2"]])]]), XlNumber 10 )
+            ( XlAddFormula      (toRC "A1")             (num 10), XlNumber 10 ),
+            ( XlAddFormula      (toRC "A2")             (num 20), XlNumber 20 ),
+
+            ( XlAddFormula      (toRC "B3")             (XlFun "INDIRECT" [XlLit (XlMatrix [[XlString "A1", XlString "A2"]])]), XlNumber 10 ),
+            ( XlAddArrayFormula (toRC "B4") (toRC "C4") (XlFun "INDIRECT" [XlLit (XlMatrix [[XlString "A1", XlString "A2"]])]), XlNumber 10 ),
+            ( XlAddFormula      (toRC "B5")             (XlFun "SUM" [XlFun "INDIRECT" [XlLit (XlMatrix [[XlString "A1", XlString "A2"]])]]), XlNumber 10 ),
+            ( XlAddArrayFormula (toRC "B6") (toRC "B6") (XlFun "SUM" [XlFun "INDIRECT" [XlLit (XlMatrix [[XlString "A1", XlString "A2"]])]]), XlNumber 30 ),
+            ( XlAddFormula      (toRC "B7")             (XlFun "SUM" [XlFun "SQRT" [range "A1" "A2"]]), XlError "#VALUE!" ),
+            ( XlAddArrayFormula (toRC "B8") (toRC "B8") (XlFun "SUM" [XlFun "SQRT" [range "A1" "A2"]]), XlNumber (sqrt 10 + sqrt 20) ),
+            ( XlAddFormula      (toRC "C7")             (XlFun "SQRT" [range "A1" "A2"]), XlError "#VALUE!" ),
+            ( XlAddArrayFormula (toRC "C8") (toRC "C9") (XlFun "SQRT" [range "A1" "A2"]), XlNumber (sqrt 10) ),
+
+            ( XlAddFormula      (toRC "D3")             (nummtx [[10, 20]]), XlNumber 10 ),
+            ( XlAddArrayFormula (toRC "D4") (toRC "E4") (nummtx [[10, 20]]), XlNumber 10 ),
+            ( XlAddFormula      (toRC "D5")             (XlFun "SUM" [nummtx [[10,20]]]), XlNumber 30 ),
+            ( XlAddArrayFormula (toRC "D6") (toRC "D6") (XlFun "SUM" [nummtx [[10,20]]]), XlNumber 30 ),
+            ( XlAddFormula      (toRC "D7")             (XlFun "SUM" [XlFun "SQRT" [nummtx [[10,20]]]]), XlNumber (sqrt 10) ),
+            ( XlAddArrayFormula (toRC "D8") (toRC "D8") (XlFun "SUM" [XlFun "SQRT" [nummtx [[10,20]]]]), XlNumber (sqrt 10 + sqrt 20) ),
+            ( XlAddFormula      (toRC "E7")             (XlFun "SQRT" [nummtx [[10,20]]]), XlNumber (sqrt 10) ),
+            ( XlAddArrayFormula (toRC "E8") (toRC "E9") (XlFun "SQRT" [nummtx [[10],[20]]]), XlNumber (sqrt 10) )
             ]
          -- 3.3 2 2.2 2.2.1) Note 8.1
          runTest [
@@ -710,17 +807,16 @@ main =
             ( XlAddFormula (toRC "G2") (ref "G1"), XlError "#N/A")
             ]
 
-         -- ISO/IEC 29500:1 2012 page 2040 ex.4
-         runTest [
-            ( XlAddFormula (toRC "A1") (XlFun "SUM" [XlFun "SQRT" [nummtx [[1,2,3,4]]]]), XlNumber 1 ) -- ((sqrt 1)+(sqrt 2)+(sqrt 3)+(sqrt 4))
-            ]
-
+         -- ISO/IEC 29500:1 2012 page 2040 ex.4 ***** consistent with LibreOffice, inconsistent with ISO doc
          runTest [
             ( XlAddFormula      (toRC "A1")             (XlFun "SUM" [XlFun "SQRT" [nummtx [[1,2,3,4]]]]), XlNumber 1 ),
-            ( XlAddArrayFormula (toRC "A2") (toRC "A2") (XlFun "SUM" [XlFun "SQRT" [nummtx [[1,2,3,4]]]]), XlNumber 1 ),
-            ( XlAddArrayFormula (toRC "B1") (toRC "E1") (XlFun "SUM" [XlFun "SQRT" [nummtx [[1,2,3,4]]]]), XlNumber 1 ),
-            ( XlAddArrayFormula (toRC "A3") (toRC "D3") (XlFun "SUM" [XlFun "+" [nummtx [[1,2,3,4]], num 100]]), XlNumber 101 ),
-            ( XlAddFormula (toRC "A4") (XlFun "SUM" [XlFun "+" [nummtx [[1,2,3,4]], num 100]]), XlNumber 101 ) -- 410
+            ( XlAddArrayFormula (toRC "A2") (toRC "A2") (XlFun "SUM" [XlFun "SQRT" [nummtx [[1,2,3,4]]]]), XlNumber ((sqrt 1)+(sqrt 2)+(sqrt 3)+(sqrt 4)) )
+            ]
+         runTest [
+            ( XlAddFormula      (toRC "A1")             (XlFun "SUM" [XlFun "SQRT" [nummtx [[1,2,3,4]]]]), XlNumber 1 ),
+            ( XlAddArrayFormula (toRC "A2") (toRC "A2") (XlFun "SUM" [XlFun "SQRT" [nummtx [[1,2,3,4]]]]), XlNumber ((sqrt 1)+(sqrt 2)+(sqrt 3)+(sqrt 4)) ),
+            ( XlAddArrayFormula (toRC "B1") (toRC "E1") (XlFun "SUM" [XlFun "SQRT" [nummtx [[1,2,3,4]]]]), XlNumber ((sqrt 1)+(sqrt 2)+(sqrt 3)+(sqrt 4)) ),
+            ( XlAddArrayFormula (toRC "A3") (toRC "D3") (XlFun "SUM" [XlFun "+" [nummtx [[1,2,3,4]], num 100]]), XlNumber 410 )
             ]
 
          runTest [
@@ -732,5 +828,7 @@ main =
             ( XlAddFormula      (toRC "B5")             (XlFun "SUM" [XlFun "+" [nummtx [[1,2,3,4]], num 100]]), XlNumber 410 ),
             ( XlAddArrayFormula (toRC "B6") (toRC "B6") (XlFun "SUM" [XlFun "+" [nummtx [[1,2,3,4]], num 100]]), XlNumber 410 ),
             ( XlAddFormula      (toRC "B7")             (XlFun "SUM" [XlFun "+" [range "A1" "A4", num 100]]), XlError "#VALUE!" ),
-            ( XlAddArrayFormula (toRC "B8") (toRC "B8") (XlFun "SUM" [XlFun "+" [range "A1" "A4", num 100]]), XlNumber 410 )
+            ( XlAddArrayFormula (toRC "B8") (toRC "B8") (XlFun "SUM" [XlFun "+" [range "A1" "A4", num 100]]), XlNumber 410 ),
+            ( XlAddFormula      (toRC "B9")             (XlFun "SUM" [XlFun "+" [XlFun "ABS" [nummtx [[1,2,3,4]] ], num 100]]), XlNumber 101 ),
+            ( XlAddArrayFormula (toRC "B10") (toRC "B10") (XlFun "SUM" [XlFun "+" [XlFun "ABS" [nummtx [[1,2,3,4]] ], num 100]]), XlNumber 410 )
             ]
