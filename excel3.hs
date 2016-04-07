@@ -1,5 +1,5 @@
 
-import Data.Map.Strict as Map (Map, empty, elems, mapWithKey, foldrWithKey, member, insert, lookup, toList, (!))
+import Data.Map.Strict as Map (Map, empty, elems, mapWithKey, foldlWithKey, member, insert, lookup, toList, (!))
 import Data.List (foldl')
 import Data.Tree (flatten)
 import Data.Char (ord, chr)
@@ -68,8 +68,8 @@ instance Show XlEnv where
    show (XlEnv cells values) = 
       "\nCells:\n" @@ listCells @@ "\nValues:\n" @@ tableValues @@ "\n" @@ values @@ "\n"
          where
-            maxRow = Map.foldrWithKey (\(XlRC (XlAbs r) _) _ mx -> max r mx) 0 values
-            maxCol = Map.foldrWithKey (\(XlRC _ (XlAbs c)) _ mx -> max c mx) 0 values
+            maxRow = Map.foldlWithKey (\mx (XlRC (XlAbs r) _) _ -> max r mx) 0 values
+            maxCol = Map.foldlWithKey (\mx (XlRC _ (XlAbs c)) _ -> max c mx) 0 values
             listCells   = Box.render $ Box.vcat Alignment.left $ map Box.text $ map show (Map.toList cells)
             tableValues = Box.render $ Box.hcat Alignment.left $ numbersColumn : map doColumn [0..maxCol]
                where 
@@ -461,7 +461,7 @@ calcCell visiting cells values myRC (XlAFCell formula (x, y)) = (scalar ev) ev v
          else XlLit $ XlError "#N/A"
 
       toScalar (XlLit (XlMatrix mtx)) =
-         displayRule (foldr max 0 (map length mtx)) (length mtx) (\x y -> XlLit $ mtx !! y !! x)
+         displayRule (foldl' max 0 (map length mtx)) (length mtx) (\x y -> XlLit $ mtx !! y !! x)
 
       toScalar (XlRng rcFrom rcTo) =
          let
@@ -489,13 +489,13 @@ run sheet@(XlWorksheet cells) events =
          let 
             newCells = updateCells cells event
             
-            acc :: XlRC -> XlCell -> XlValues -> XlValues
-            acc rc cell values =
+            acc :: XlValues -> XlRC -> XlCell -> XlValues
+            acc values rc cell =
                if Map.member rc values
                then values
                else snd $ calcCell (Set.singleton rc) newCells values rc cell
          in
-            XlEnv newCells (Map.foldrWithKey acc Map.empty newCells)
+            XlEnv newCells (Map.foldlWithKey acc Map.empty newCells)
 
    in foldl' runEvent (XlEnv cells Map.empty) events
 
