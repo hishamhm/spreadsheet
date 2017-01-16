@@ -3,7 +3,7 @@ import Data.Map.Strict as Map (Map, empty, elems, mapWithKey, foldlWithKey, memb
 import Data.List (foldl')
 import Data.Tree (flatten)
 import Data.Char (ord, chr)
-import Data.Set as Set (Set, insert, member, empty, union, toList, singleton, fromList)
+import Data.Set as Set (Set, insert, member, empty, union, toList, singleton)
 import Debug.Trace
 import Data.Fixed
 import Text.PrettyPrint.Boxes as Box (render, hcat, vcat, text)
@@ -373,7 +373,7 @@ iterateFormula ev values (XlFun name args) =
    trc ("iterateFormula:" @@@ maxX @@@ "Y:" @@@ maxY) $
    if maxX > 1 || maxY > 1
    then (\(m, v) -> (XlMatrix m, v)) $ foldl doRow ([], values) [0..maxY-1]
-   else (scalar ev) ev values (XlFun name args)
+   else evalFormula ev values (XlFun name args)
    where
       XlRC (XlAbs y) (XlAbs x) = rc ev
       maxY :: Int
@@ -403,7 +403,7 @@ iterateFormula ev values (XlFun name args) =
                trc "converted:" $ tsi $
                map ((toScalar ev) (rc ev) x y) args))
             appendTo :: [a] -> (a, b) -> ([a], b)
-            appendTo xs (val, vals) = (val : xs, vals)
+            appendTo xs (val, vals) = (xs ++ [val], vals)
 
 matrixArrayEvaluator ev values formula =
    trc ("matrixArrayEvaluator" @@@ formula) $ tsi $
@@ -432,6 +432,7 @@ matrixScalarEvaluator ev values formula =
       case formula' of
          XlLit v -> updateRC ev v values
          XlRef ref -> getRef ev values ref
+--         XlFun name args | scalarFunction name -> traceShowId $ iterateFormula ev values formula
          _ -> evalFormula ev values formula'
 
 -- NOTE that we can't just evaluate a range to a matrix and convert to scalar,
@@ -453,6 +454,7 @@ scalarize ev (value, values) =
    (value', values)
    where
       (x, y) = xy ev
+      --(XlLit value') = intersectScalar (toRC "A1") x y (XlLit value)
       (XlLit value') = (toScalar ev) (rc ev) x y (XlLit value)
 
 -- 3.3) Non-Scalar Evaluation (aka 'Array expressions') [page 27]
@@ -540,7 +542,7 @@ calcCell visiting cells values myRC@(XlRC (XlAbs r) (XlAbs c)) (XlCell formula) 
          array = simpleArrayEvaluator
       }
 
-calcCell visiting cells values myRC (XlAFCell formula (x, y)) = (scalar ev) ev values formula
+calcCell visiting cells values myRC (XlAFCell formula (x, y)) = scalarize ev $ (scalar ev) ev values formula
    where
       ev = Evaluator {
          rc = myRC,
@@ -824,11 +826,17 @@ main =
             ( XlAddFormula      (toRC "A2")             (num 2), XlNumber 2 ),
             ( XlAddFormula      (toRC "A3")             (num 3), XlNumber 3 ),
             ( XlAddFormula      (toRC "A4")             (num 4), XlNumber 4 ),
-            
-            ( XlAddFormula      (toRC "B5")             (XlFun "SUM" [XlFun "+" [nummtx [[1,2,3,4]], num 100]]), XlNumber 410 ),
-            ( XlAddArrayFormula (toRC "B6") (toRC "B6") (XlFun "SUM" [XlFun "+" [nummtx [[1,2,3,4]], num 100]]), XlNumber 410 ),
-            ( XlAddFormula      (toRC "B7")             (XlFun "SUM" [XlFun "+" [range "A1" "A4", num 100]]), XlError "#VALUE!" ),
-            ( XlAddArrayFormula (toRC "B8") (toRC "B8") (XlFun "SUM" [XlFun "+" [range "A1" "A4", num 100]]), XlNumber 410 ),
-            ( XlAddFormula      (toRC "B9")             (XlFun "SUM" [XlFun "+" [XlFun "ABS" [nummtx [[1,2,3,4]] ], num 100]]), XlNumber 101 ),
-            ( XlAddArrayFormula (toRC "B10") (toRC "B10") (XlFun "SUM" [XlFun "+" [XlFun "ABS" [nummtx [[1,2,3,4]] ], num 100]]), XlNumber 410 )
+            ( XlAddFormula      (toRC "B5")             (XlFun "SUM" [XlFun "+" [range "A1" "A4", num 100]]), XlError "#VALUE!" ),
+            ( XlAddArrayFormula (toRC "B6") (toRC "B6") (XlFun "SUM" [XlFun "+" [range "A1" "A4", num 100]]), XlNumber 410 )
+            ]
+         
+         runTest [
+            ( XlAddFormula      (toRC "A3") (str "F"), XlString "F" ),
+            ( XlAddFormula      (toRC "B3")             (XlFun "SUM" [XlFun "+" [nummtx [[1,2,3,4]], num 100]]), XlNumber 410 ),
+            ( XlAddFormula      (toRC "A4") (str "AF"), XlString "AF" ),
+            ( XlAddArrayFormula (toRC "B4") (toRC "B4") (XlFun "SUM" [XlFun "+" [nummtx [[1,2,3,4]], num 100]]), XlNumber 410 ),
+            ( XlAddFormula      (toRC "A5") (str "F"), XlString "F" ),
+            ( XlAddFormula      (toRC "B5")             (XlFun "SUM" [XlFun "+" [XlFun "ABS" [nummtx [[1,2,3,4]] ], num 100]]), XlNumber 101 ),
+            ( XlAddFormula      (toRC "A6") (str "AF"), XlString "AF" ),
+            ( XlAddArrayFormula (toRC "B6") (toRC "B6") (XlFun "SUM" [XlFun "+" [XlFun "ABS" [nummtx [[1,2,3,4]] ], num 100]]), XlNumber 410 )
             ]

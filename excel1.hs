@@ -91,7 +91,7 @@ cellsToNodes cells =
       convert rc cell@(XlCell formula) = (cell, rc, Set.toList $ rcsInFormula rc formula)
 --      convert rc cell@(XlArrayFormula ast) = (cell, rc, Set.toList $ rcsInAst rc ast)
    in
-      elems $ mapWithKey convert cells
+      Map.elems $ mapWithKey convert cells
 
 evalArg :: XlValues -> XlRC -> XlArg -> XlArgValue
 evalArg values rc (XlFml val) = XlVal (evalFormula values rc val)
@@ -116,11 +116,12 @@ evalCell :: XlValues -> XlRC -> XlCell -> XlValue
 evalCell values rc (XlCell formula) = evalFormula values rc formula
 -- evalCell values rc (XlArrayFormula formula) = -- TODO
 
-updateCell values rc cell = insert rc (evalCell values rc cell) values
+updateValue rc cell values = insert rc (evalCell values rc cell) values
 
 run :: XlWorksheet -> [XlEvent] -> XlEnv
 run sheet@(XlWorksheet cells) events =
-   let
+   foldl' runEvent (XlEnv cells Map.empty) events
+   where
       runEvent :: XlEnv -> XlEvent -> XlEnv
       runEvent env@(XlEnv cells values) event@(XlEvent rc newCell) =
          let
@@ -134,18 +135,15 @@ run sheet@(XlWorksheet cells) events =
                case trace (show dependencyGraph) keyToVert rc of
                   Just v  -> filter (\e -> e /= v) (reachable dependentsGraph v)
                   Nothing -> []
-               
+            
             evalVertex :: XlEnv -> Vertex -> XlEnv
             evalVertex env@(XlEnv cells values) vtx =
                let
                   (cell, rc, _) = vertList vtx
                in
-                  XlEnv cells (updateCell values rc cell) 
-
+                  XlEnv cells (updateValue rc cell values)
          in
-            foldl evalVertex (XlEnv (insert rc newCell cells) (updateCell values rc newCell)) (trace (show affectedNodes) affectedNodes)
-   
-   in foldl' runEvent (XlEnv cells Map.empty) events
+            foldl evalVertex (XlEnv (insert rc newCell cells) (updateValue rc newCell values)) (trace (show affectedNodes) affectedNodes)
 
 -- Converts Excel addresses in "A1" format to internal RC format.
 -- Supports only rows A-Z, and absolute addresses.
