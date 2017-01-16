@@ -62,7 +62,7 @@ data XlEvent = XlAddFormula XlRC XlFormula
 
 type XlValues = Map.Map XlRC XlValue
 
-data XlEnv = XlEnv XlCells XlValues
+data XlState = XlState XlCells XlValues
 
 tsi :: Show a => a -> a
 --tsi = traceShowId
@@ -71,8 +71,8 @@ tsi :: Show a => a -> a
 tsi = id
 trc m = id
 
-instance Show XlEnv where
-   show (XlEnv cells values) = 
+instance Show XlState where
+   show (XlState cells values) = 
       "\nCells:\n" @@ listCells @@ "\nValues:\n" @@ tableValues @@ "\n" @@ values @@ "\n"
          where
             maxRow = Map.foldlWithKey (\mx (XlRC (XlAbs r) _) _ -> max r mx) 0 values
@@ -563,11 +563,11 @@ updateCells cells event@(XlAddArrayFormula rcFrom rcTo formula) =
          cellOp (cells, (x, y)) rc = (Map.insert rc (XlAFCell formula (x, y)) cells, (x + 1, y))
          rowOp _ r (cells, (x, y)) = (cells, (0, y + 1))
 
-run :: XlWorksheet -> [XlEvent] -> XlEnv
+run :: XlWorksheet -> [XlEvent] -> XlState
 run sheet@(XlWorksheet cells) events =
    let
-      runEvent :: XlEnv -> XlEvent -> XlEnv
-      runEvent env@(XlEnv cells _) event =
+      runEvent :: XlState -> XlEvent -> XlState
+      runEvent env@(XlState cells _) event =
          let 
             newCells = updateCells cells event
             
@@ -577,9 +577,9 @@ run sheet@(XlWorksheet cells) events =
                then values
                else snd $ calcCell (Set.singleton rc) newCells values rc cell
          in
-            XlEnv newCells (Map.foldlWithKey acc Map.empty newCells)
+            XlState newCells (Map.foldlWithKey acc Map.empty newCells)
 
-   in foldl' runEvent (XlEnv cells Map.empty) events
+   in foldl' runEvent (XlState cells Map.empty) events
 
 str :: String -> XlFormula
 str s = XlLit (XlString s)
@@ -600,7 +600,7 @@ main =
    let
       runTest operations =
          let
-            env@(XlEnv cells values) = run (XlWorksheet Map.empty) (map fst operations)
+            env@(XlState cells values) = run (XlWorksheet Map.empty) (map fst operations)
             value :: String -> XlValue
             value a1 = values ! (toRC a1)
          

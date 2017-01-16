@@ -63,10 +63,10 @@ type XlValues = Map.Map XlRC XlValue
 
 type XlDeps = [(XlCell, XlRC, [XlRC])]
 
-data XlEnv = XlEnv XlCells XlValues XlDeps
+data XlState = XlState XlCells XlValues XlDeps
 
-instance Show XlEnv where
-   show (XlEnv cells values _) = (Box.render $ Box.vcat Alignment.left $ map Box.text $ (map show (Map.toList cells))) ++ "\n\n" ++ (Box.render $ Box.hcat Alignment.left $ numbers : map doRow [0..25])
+instance Show XlState where
+   show (XlState cells values _) = (Box.render $ Box.vcat Alignment.left $ map Box.text $ (map show (Map.toList cells))) ++ "\n\n" ++ (Box.render $ Box.hcat Alignment.left $ numbers : map doRow [0..25])
       where
          lpad m xs = reverse $ take m $ reverse $ (take m $ repeat ' ') ++ (take m xs)
          numbers = Box.vcat Alignment.right $ map Box.text $ " " : map show [1..26]
@@ -101,10 +101,10 @@ toString n =
       then show n
       else show (floor n)
 
-putValue :: XlEnv -> XlRC -> XlValue -> XlEnv
-putValue env@(XlEnv cells values deps) rc value = XlEnv cells (Map.insert rc value values) deps
+putValue :: XlState -> XlRC -> XlValue -> XlState
+putValue env@(XlState cells values deps) rc value = XlState cells (Map.insert rc value values) deps
 
-evalFormula :: Set XlRC -> XlEnv -> XlRC -> XlFormula -> (XlValue, XlEnv)
+evalFormula :: Set XlRC -> XlState -> XlRC -> XlFormula -> (XlValue, XlState)
 evalFormula _ env rc (XlLit value) = (value, putValue env rc value)
 
 evalFormula visiting cells values rc (XlRef ref')  = 
@@ -215,25 +215,25 @@ evalFormula visiting cells values rc (XlFun "SUM" [rng]) =
    in
       (val, Map.insert rc val values')
 
-updateCell :: XlEnv -> XlRC -> XlCell -> XlEnv
-updateCell env@(XlEnv cells values deps) rc cell@(XlCell formula) =
+updateCell :: XlState -> XlRC -> XlCell -> XlState
+updateCell env@(XlState cells values deps) rc cell@(XlCell formula) =
    let
       newCells = (Map.insert rc cell cells)
-      env' = XlEnv newCells values deps
+      env' = XlState newCells values deps
       (_, (newValues, newDeps)) = evalFormula Set.empty env' rc formula
    in
-      XlEnv newCells newValues newDeps
+      XlState newCells newValues newDeps
 
 calcCell env rc (XlAFCell formula) = undefined -- TODO
 
-run :: XlWorksheet -> [XlEvent] -> XlEnv
+run :: XlWorksheet -> [XlEvent] -> XlState
 run sheet@(XlWorksheet cells) events =
    let
-      runEvent :: XlEnv -> XlEvent -> XlEnv
-      runEvent env@(XlEnv cells values deps) event@(XlEvent rc newCell) =
-         updateCell (XlEnv cells values deps) rc newCell
+      runEvent :: XlState -> XlEvent -> XlState
+      runEvent env@(XlState cells values deps) event@(XlEvent rc newCell) =
+         updateCell (XlState cells values deps) rc newCell
  
-   in foldl' runEvent (XlEnv cells Map.empty []) events
+   in foldl' runEvent (XlState cells Map.empty []) events
 
 str :: String -> XlFormula
 str s = XlLit (XlString s)

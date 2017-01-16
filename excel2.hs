@@ -61,10 +61,10 @@ data XlEvent = XlEvent XlRC XlCell
 
 type XlValues = Map.Map XlRC XlValue
 
-data XlEnv = XlEnv XlCells XlValues
+data XlState = XlState XlCells XlValues
 
-instance Show XlEnv where
-   show (XlEnv cells values) = (Box.render $ Box.vcat Alignment.left $ map Box.text $ (map show (Map.toList cells))) ++ "\n\n" ++ (Box.render $ Box.hcat Alignment.left $ numbers : map doRow [0..25])
+instance Show XlState where
+   show (XlState cells values) = (Box.render $ Box.vcat Alignment.left $ map Box.text $ (map show (Map.toList cells))) ++ "\n\n" ++ (Box.render $ Box.hcat Alignment.left $ numbers : map doRow [0..25])
       where
          lpad m xs = reverse $ take m $ reverse $ (take m $ repeat ' ') ++ (take m xs)
          numbers = Box.vcat Alignment.right $ map Box.text $ " " : map show [1..26]
@@ -216,11 +216,11 @@ updateValue cells values rc (XlCell formula) = snd $ evalFormula Set.empty cells
 calcCell cells values rc (XlAFCell formula)                     = -- TODO
 -}
 
-run :: XlWorksheet -> [XlEvent] -> XlEnv
+run :: XlWorksheet -> [XlEvent] -> XlState
 run sheet@(XlWorksheet cells) events =
    let
-      runEvent :: XlEnv -> XlEvent -> XlEnv
-      runEvent env@(XlEnv cells _) event@(XlEvent rc newCell) =
+      runEvent :: XlState -> XlEvent -> XlState
+      runEvent env@(XlState cells _) event@(XlEvent rc newCell) =
          let 
             newCells = Map.insert rc newCell cells
             
@@ -230,9 +230,9 @@ run sheet@(XlWorksheet cells) events =
                then values
                else updateValue newCells values rc cell
          in
-            XlEnv newCells (Map.foldrWithKey acc Map.empty newCells)
+            XlState newCells (Map.foldrWithKey acc Map.empty newCells)
  
-   in foldl' runEvent (XlEnv cells Map.empty) events
+   in foldl' runEvent (XlState cells Map.empty) events
 
 str :: String -> XlFormula
 str s = XlLit (XlString s)

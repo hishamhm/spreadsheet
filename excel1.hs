@@ -57,7 +57,7 @@ data XlEvent = XlEvent XlRC XlCell
 
 type XlValues = Map.Map XlRC XlValue
 
-data XlEnv = XlEnv XlCells XlValues
+data XlState = XlState XlCells XlValues
    deriving Show
 
 toAbs :: XlRC -> XlRC -> XlRC
@@ -118,12 +118,12 @@ evalCell values rc (XlCell formula) = evalFormula values rc formula
 
 updateValue rc cell values = insert rc (evalCell values rc cell) values
 
-run :: XlWorksheet -> [XlEvent] -> XlEnv
+run :: XlWorksheet -> [XlEvent] -> XlState
 run sheet@(XlWorksheet cells) events =
-   foldl' runEvent (XlEnv cells Map.empty) events
+   foldl' runEvent (XlState cells Map.empty) events
    where
-      runEvent :: XlEnv -> XlEvent -> XlEnv
-      runEvent env@(XlEnv cells values) event@(XlEvent rc newCell) =
+      runEvent :: XlState -> XlEvent -> XlState
+      runEvent env@(XlState cells values) event@(XlEvent rc newCell) =
          let
             (dependencyGraph, vertList, keyToVert) = graphFromEdges (cellsToNodes cells)
             
@@ -136,14 +136,14 @@ run sheet@(XlWorksheet cells) events =
                   Just v  -> filter (\e -> e /= v) (reachable dependentsGraph v)
                   Nothing -> []
             
-            evalVertex :: XlEnv -> Vertex -> XlEnv
-            evalVertex env@(XlEnv cells values) vtx =
+            evalVertex :: XlState -> Vertex -> XlState
+            evalVertex env@(XlState cells values) vtx =
                let
                   (cell, rc, _) = vertList vtx
                in
-                  XlEnv cells (updateValue rc cell values)
+                  XlState cells (updateValue rc cell values)
          in
-            foldl evalVertex (XlEnv (insert rc newCell cells) (updateValue rc newCell values)) (trace (show affectedNodes) affectedNodes)
+            foldl evalVertex (XlState (insert rc newCell cells) (updateValue rc newCell values)) (trace (show affectedNodes) affectedNodes)
 
 -- Converts Excel addresses in "A1" format to internal RC format.
 -- Supports only rows A-Z, and absolute addresses.
