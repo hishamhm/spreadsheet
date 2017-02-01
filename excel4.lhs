@@ -38,7 +38,7 @@
 %format XlEvent = "\mathds{E}"
 %format XlWorksheet = "\mathds{W}"
 %format XlAddr = "\mathds{A}"
-%format XlEvaluator = "\mathds{X}"Ä∆r∑Ä∆r∑òç.òç.H~	H~	
+%format XlEvaluator = "\mathds{X}"
 %format `Set.member` = "\in"
 %format Map.empty = "\{\}"
 %format va = "v_a"
