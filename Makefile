@@ -1,4 +1,6 @@
 
+EXCEL=0
+
 .PHONY: all test_consistency_hs_lhs
 
 all: diff_ok excel4.pdf
@@ -7,11 +9,14 @@ excel4.pdf: excel4.tex
 	pdflatex excel4.tex
 
 excel4.tex: excel4.lhs
-	~/.cabal/bin/lhs2TeX excel4.lhs > excel4.tex
+	~/.cabal/bin/lhs2TeX -lexcel=$(EXCEL) excel4.lhs > excel4.tex
+
+EXCEL:
+	make clean all EXCEL=1
 
 excel4: excel4.lhs
 	rm -f excel4.o excel4.hi
-	ghc -o excel4 excel4.lhs
+	ghc -o excel4 -cpp -DEXCEL=$(EXCEL) excel4.lhs
 
 lhs_lines: excel4
 	./excel4 | tr ',' '\n' | tr -d '[]' > lhs_lines
