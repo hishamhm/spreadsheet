@@ -9,48 +9,36 @@
 \title{Demonstration of the spreadsheet interpreter}
 \author{Hisham Muhammad}
 
+\maketitle{}
+
 \section{Introduction}
 
 \begin{code}
 
-import XlInterpreter(runEvents)
+import XlInterpreter
+import Data.Char (chr)
+import Data.Map.Strict as Map (foldlWithKey, empty, lookup, toList, (!))
 import Text.PrettyPrint.Boxes as Box (render, hcat, vcat, text)
 import Text.PrettyPrint.Boxes as Alignment (left, right)
-import ShowConcat ((@@), (@@@))
 
 \end{code}
 
 \section{Demonstration}
 
 In order to produce a more readable output, we define the instance |Show| for
-our data types using the |Text.PrettyPrint| package to produce tabular
+our |XlState| type, using the |Text.PrettyPrint| package to produce tabular
 outputs.
 
 \begin{code}
 
-instance Show XlValue where
-   show (XlNumber d)  = num2str d
-   show (XlString s)  = show s
-   show (XlBoolean b) = show b
-   show (XlError e)   = show e
-   show (XlMatrix m)  = show m
-
-instance Show XlAddr where
-   show (XlAbs n) = show n
-   show (XlRel n) = "[" @@ n @@ "]"
-
-instance Show XlRC where
-   show (XlRC r@(XlAbs rn) c@(XlAbs cn)) = "<" @@ [chr (cn + 65)] @@ (rn + 1) @@ ">"
-   show (XlRC r c) = "R" @@ r @@ "C" @@ c
-
 instance Show XlState where
    show (XlState cells values) = 
-      "\nCells:\n" @@
-      listCells @@
-      "\nValues:\n" @@
-      tableValues @@
-      "\n" @@
-      values @@
+      "\nCells:\n" ++
+      listCells ++
+      "\nValues:\n" ++
+      tableValues ++
+      "\n" ++
+      show values ++
       "\n"
          where
             maxRow       =  Map.foldlWithKey (\mx (XlRC (XlAbs r) _) _ -> max r mx) 0 values

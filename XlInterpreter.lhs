@@ -20,15 +20,13 @@ not performance.
 
 \begin{code}
 
-module XlInterpreter(runEvents) where
+module XlInterpreter where
 
-import Data.Map.Strict as Map (  Map, empty, elems, mapWithKey, foldlWithKey, member,
-                                 insert, lookup, toList, (!))
-import Data.List (foldl')
-import Data.Tree (flatten)
 import Data.Char (ord, chr)
-import Data.Set as Set (Set, insert, member, toList, singleton)
 import Data.Fixed
+import Data.List (foldl')
+import Data.Map.Strict as Map (Map, foldlWithKey, member, insert, empty, lookup)
+import Data.Set as Set (Set, insert, member, singleton)
 
 \end{code}
 
@@ -52,7 +50,6 @@ data XlCell  =  XlCell XlFormula
              |  XlAFCell XlFormula (Int, Int)
    deriving Show
 
-
 data XlFormula  =  XlLit  XlValue
                 |  XlFun  String [XlFormula]
                 |  XlRef  XlRC
@@ -66,6 +63,28 @@ data XlValue  =  XlNumber   Double
               |  XlMatrix   [[XlValue]]
    deriving Eq
 
+\end{code}
+
+For convenience we define a few instances of |Show| that will prove useful
+later when running the interpreter.
+
+\begin{code}
+instance Show XlRC where
+   show (XlRC r@(XlAbs rn) c@(XlAbs cn)) =
+      "<" ++ [chr (cn + 65)] ++ (show (rn + 1)) ++ ">"
+   show (XlRC r c) =
+      "R" ++ show r ++ "C" ++ show c
+
+instance Show XlValue where
+   show (XlNumber d)  = num2str d
+   show (XlString s)  = show s
+   show (XlBoolean b) = show b
+   show (XlError e)   = show e
+   show (XlMatrix m)  = show m
+
+instance Show XlAddr where
+   show (XlAbs n) = show n
+   show (XlRel n) = "[" ++ show n ++ "]"
 \end{code}
 
 \section{Representation of states}
@@ -146,7 +165,7 @@ updateCells cells event@(XlSetFormula rc formula) =
 updateCells cells event@(XlSetArrayFormula rcFrom rcTo formula) =
    fst $ foldRange rcFrom rcFrom rcTo (cells, (0, 0)) id cellOp rowOp
       where
-         cellOp (cells, (x, y)) rc  = (Map.insert rc ({- traceShowId $ -} XlAFCell formula (x, y)) cells, (x + 1, y))
+         cellOp (cells, (x, y)) rc  = (Map.insert rc (XlAFCell formula (x, y)) cells, (x + 1, y))
          rowOp _ r (cells, (x, y))  = (cells, (0, y + 1))
 \end{code}
 
@@ -384,7 +403,6 @@ matrixScalarEvaluator ev values formula =
       (x, y) = xy ev
       formula' = (toScalar ev) (rc ev) x y formula
    in
-      --trace ("RC " @@ (rc ev) @@ "\nMSE " @@ formula @@ "\n>>> " @@ formula' @@ "\n\n") $
       case formula' of
          XlLit v -> updateRC ev v values
          XlRef ref -> getRef ev values ref
@@ -460,11 +478,8 @@ matrixToScalar myRC x y formula =
       XlLit (XlMatrix mtx) ->
          displayRule x y (foldl' max 0 (map length mtx)) (length mtx) (\x y -> XlLit $ mtx !! y !! x)
       XlRng rcFrom rcTo ->
-         --trace ("Converted range (" @@ rcFrom @@@ rcTo @@ ") " @@ x @@@ y @@ " => ") $ traceShowId $ 
          displayRule x y (1 + toC - fromC) (1 + toR - fromR)
                      (\x y ->
-                        --trace ("FromR" @@@ fromR @@@ "x" @@@ x @@@ "FromC" @@@ fromC @@@ "y" @@@ y @@@ "=>") $
-                        --traceShowId $
                         XlRef (XlRC (XlAbs (fromR + y)) (XlAbs (fromC + x))))
             where 
                (fromR, fromC, toR, toC) = getRCs myRC rcFrom rcTo
@@ -475,11 +490,9 @@ matrixToScalar myRC x y formula =
       -- determined by:
       displayRule :: Int -> Int -> Int -> Int -> (Int -> Int -> XlFormula) -> XlFormula
       displayRule x y sizeX sizeY getXY =
-         -- trace ("sizex" @@@ sizeX @@@ "sizey" @@@ sizeY) $
          -- 2.1.1) If the position to be displayed exists in the result, display that position.
          if sizeY > y && sizeX > x
-         then -- trace ("got it") $ traceShowId $ 
-            getXY x y
+         then getXY x y
          -- [Rules 2.1.2 and 2.1.3 apply to singletons]
          else if sizeX == 1 && sizeY == 1
          then getXY 0 0
