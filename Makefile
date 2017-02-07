@@ -1,33 +1,36 @@
 
 .PHONY: all test_consistency_hs_lhs
 
-all: diff_ok XlInterpreter.pdf XlInterpreterDemo.pdf
+all: diff_ok XlInterpreter.pdf DemoXlInterpreter.pdf
 
-XlInterpreterDemo.pdf: XlInterpreterDemo.tex
-	pdflatex XlInterpreterDemo.tex
+DemoXlInterpreter.pdf: DemoXlInterpreter.tex
+	pdflatex DemoXlInterpreter.tex
 
-XlInterpreterDemo.tex: XlInterpreterDemo.lhs
-	~/.cabal/bin/lhs2TeX XlInterpreterDemo.lhs > XlInterpreterDemo.tex
+DemoXlInterpreter.tex: DemoXlInterpreter.lhs Xl_format.lhs
+	~/.cabal/bin/lhs2TeX DemoXlInterpreter.lhs > DemoXlInterpreter.tex
 
 XlInterpreter.pdf: XlInterpreter.tex
 	pdflatex XlInterpreter.tex
 
-XlInterpreter.tex: XlInterpreter.lhs
+XlInterpreter.tex: XlInterpreter.lhs Xl_format.lhs
 	~/.cabal/bin/lhs2TeX XlInterpreter.lhs > XlInterpreter.tex
 
-XlInterpreter: XlInterpreter.lhs
-	rm -f XlInterpreter.o XlInterpreter.hi XlInterpreterDemo.o XlInterpreterDemo.hi
-	ghc -o XlInterpreter -cpp XlInterpreterDemo.lhs
+DemoXlInterpreter: DemoXlInterpreter.lhs XlInterpreter.lhs
+	rm -f XlInterpreter.o XlInterpreter.hi DemoXlInterpreter.o DemoXlInterpreter.hi
+	ghc -o DemoXlInterpreter -cpp DemoXlInterpreter.lhs
 
-lhs_lines: XlInterpreter
-	./XlInterpreter | tr ',' '\n' | tr -d '[]' > lhs_lines
+lhs_lines: DemoXlInterpreter
+	./DemoXlInterpreter > lhs_lines
 
 hs_lines: XlInterpreter_hs
-	./XlInterpreter_hs | tr ',' '\n' | tr -d '[]' > hs_lines
+	./XlInterpreter_hs > hs_lines
 
-diff_ok: hs_lines lhs_lines
-	diff hs_lines lhs_lines > diff_ok
+diff_ok: works.txt lhs_lines
+	diff works.txt lhs_lines > diff_ok
 	[ `stat -c '%s' diff_ok` = 0 ]
+#diff_ok: hs_lines lhs_lines
+#	diff hs_lines lhs_lines > diff_ok
+#	[ `stat -c '%s' diff_ok` = 0 ]
 
 XlInterpreter_hs: XlInterpreter_hs.hs
 	rm -f XlInterpreter_hs.o XlInterpreter_hs.hi

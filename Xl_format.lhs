@@ -24,21 +24,22 @@
 %format (XlRel v) = "\langle " v "\rangle_{R}"
 
 %format `Set.member` = "\in"
+%format rb = "r_b"
+%format cb = "c_b"
 %format va = "v_a"
 %format vb = "v_b"
 %format vi = "v_i"
 %format vr = "v_r"
 %format na = "n_a"
 %format nb = "n_b"
-%format valuesa = "values_a"
-%format valuesr = "values_r"
+%format vsa = "vs_a"
+%format vsr = "vs_r"
 %format vstr = "v_{str}"
 %format vstart = "v_{start}"
 %format vlen = "v_{len}"
-%format valuesacc = "values_{acc}"
-%format valuesRow = "values_{row}"
-%format valuesi = "values_{i}"
-%format valuesm = "values_{m}"
+%format vsacc = "vs_{acc}"
+%format vsi = "vs_{i}"
+%format vsm = "vs_{m}"
 %format vstr'
 %format vstart'
 %format vlen'

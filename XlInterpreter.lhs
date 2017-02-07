@@ -1,5 +1,5 @@
 \documentclass[a4paper]{article}
-\setlength{\parskip}{\baselineskip}
+%\setlength{\parskip}{\baselineskip}
 \usepackage[margin=3cm]{geometry}
 %include polycode.fmt
 %include Xl_format.lhs
@@ -12,11 +12,18 @@
 \maketitle{}
 
 This is an interpreter designed to model the core semantics of spreadsheets,
-with a focus on the dataflow language at its core. The intention here is to
-describe the evaluation logic of the language, so the goal here is clarity,
-not performance.
+with a focus on the dataflow language at its core. We chose to model most
+closely the semantics of LibreOffice, which is the spreadsheet for which the
+most detailed specification documents are available.
 
-%This implementation uses only standard modules included in the Haskell Platform:
+Our intention here is to illustrate the various design decisions that go into
+specifying precise semantics for a spreadsheet containing a realistic set of
+features, showcasing how complexity arises from what is usually seen as a
+conceptually simple language. We believe that this helps to explain the number
+of incompatibilities between different implementations that we found and
+described in our work.
+
+This implementation uses only standard modules included in the Haskell Platform:
 
 \begin{code}
 
@@ -27,10 +34,19 @@ import Data.Fixed
 import Data.List (foldl')
 import Data.Map.Strict as Map (Map, foldlWithKey, member, insert, empty, lookup)
 import Data.Set as Set (Set, insert, member, singleton)
+import Debug.Trace
 
 \end{code}
 
 \section{Representation of programs}
+
+A spreadsheet program (called a ``worksheet'') is represented with the
+|XlWorksheet| data type in our model, which contains a map from row-column
+coordinates to cells.
+
+In modern spreadsheet applications, a complete document is a set of worksheets
+(called a workbook). For simplicity, we did not implement support for multiple
+worksheets since this does not affect evaluation significantly.
 
 \begin{code}
 
@@ -39,22 +55,60 @@ data XlWorksheet = XlWorksheet XlCells
 
 type XlCells = Map.Map XlRC XlCell
 
+\end{code}
+
+We represent row-column pairs with the notation |XlRC|. It contains a pair
+of addresses, representing row and column, and each of which may be absolute
+(represented as |XlAbs n|) or relative (represented as |XlRel n|).
+
+\begin{code}
+
 data XlRC = XlRC XlAddr XlAddr
    deriving (Eq, Ord)
 
-data XlAddr  =  XlAbs  Int  -- absolute address
-             |  XlRel  Int  -- relative address
+data XlAddr  =  XlAbs  Int  -- (absolute address)
+             |  XlRel  Int  -- (relative address)
    deriving (Eq, Ord)
 
-data XlCell  =  XlCell XlFormula
-             |  XlAFCell XlFormula (Int, Int)
+\end{code}
+
+Cells contain formulas. It is a property of the cell the indication if the formula
+will be evaluated normally or as an "array formula". In the spreadsheet interface,
+a single array formula is presented as covering a range of cells. In our interpreter,
+we replicate the formula in each cell of the range, and annotate it with an
+$(x, y)$ coordinate pair indicating which element of the range matrix they represent,
+with the top-left cell being entry $(0, 0)$.
+
+\begin{code}
+
+data XlCell  =  XlCell    XlFormula
+             |  XlAFCell  XlFormula (Int, Int)
    deriving Show
 
+\end{code}
+
+A formula, on its turn, may be a literal value, a reference to another cell, a
+reference to a range of cells, or a function, which has a name and a list of
+arguments. Our interpreter, thus, manipulates expressions as trees of |XlFun|
+nodes, assuming that the textual formula language has already been parsed into
+this format.
+
+\begin{code}
+
 data XlFormula  =  XlLit  XlValue
-                |  XlFun  String [XlFormula]
                 |  XlRef  XlRC
                 |  XlRng  XlRC XlRC
+                |  XlFun  String [XlFormula]
    deriving Show
+
+\end{code}
+
+Finally, values are numbers, strings, booleans, errors and matrices of
+literals. We represent all matrices as 2-dimensional, stored as a list of
+lists, which each inner list representing a row (a unidimensional array is a
+2-dimensional matrix with a single row).
+
+\begin{code}
 
 data XlValue  =  XlNumber   Double
               |  XlString   String
@@ -65,8 +119,14 @@ data XlValue  =  XlNumber   Double
 
 \end{code}
 
-For convenience we define a few instances of |Show| that will prove useful
-later when running the interpreter.
+For convenience we define a few instances of the |Show| type class that will
+prove useful later when running the interpreter. In particular, for display
+purposes we convert absolute row-column coordinates to the familiar ``A1''
+notation.\footnote{We made a simplification here by presenting absolute
+coordinates using strings such as @B5@. Such an identifier would actually
+represent a relative coordinate, with @$B$5@ being the absolute equivalent.
+The @A1@ notation hides the fact that coordinates in spreadsheets are relative
+by default (which explains their behavior when copying and pasting cells).}
 
 \begin{code}
 instance Show XlRC where
@@ -88,6 +148,10 @@ instance Show XlAddr where
 \end{code}
 
 \section{Representation of states}
+
+The state of a spreadsheet is the pairing of the map of cells, which stores
+the cells and their contents (that is, the formulas), and the map of values,
+which stores the computed value for each cell.
 
 \begin{code}
 
@@ -113,18 +177,22 @@ data XlEvent  =  XlSetFormula       XlRC XlFormula
 
 \section{Execution}
 
-The execution of a spreadsheet is demand-driven. The user triggers by editing cells,
-which cause their value to be recomputed. When computing the value of a cell, other
-cells may be referenced, so they are computed as well, and the process continues
-recursively.
+The execution of a spreadsheet is demand-driven. The user triggers the
+evaluation by editing a cell, which causes its value to be recomputed. When
+computing the value of a cell, other cells may be referenced, so they are
+computed as well, and the process continues recursively. Conversely,
+other cells may reference the newly-edited cell, so their values need
+to be recomputed as well.
 
 \subsection{Main loop}
 
-Since we are interested in the dynamic semantics (that is, what happens with the 
-program state over time as it runs), we model our interpreter as a loop of
-evaluation steps. The main driver function takes a worksheet (a spreadsheet
-document containing the initial values of cell formulas), a list of events,
-and produces the final state, containing the resulting cells and their values.
+Since we are interested in the dynamic semantics (that is, what happens with
+the program state over time as it runs), we model our interpreter as a loop of
+evaluation steps. The function |runEvents| implements this loop, taking as
+inputs a worksheet (a spreadsheet document containing the initial contents of
+cell formulas) and a list of events. For each event, it calls the main
+evaluation function, |runEvent|, until it produces the final state, containing
+the resulting cells and their values.
 
 \begin{code}
 runEvents :: XlWorksheet -> [XlEvent] -> XlState
@@ -132,13 +200,24 @@ runEvents sheet@(XlWorksheet cells) events =
    foldl' runEvent (XlState cells Map.empty) events
 \end{code}
 
-For each event, we need to update the cells entered and then recalculate the
-values of cells. Since we are not concerned with performance and formulas
-are in principle purely functional, we simply recompute all cells in the
-worksheet. This saves us from having to maintain a reverse dependency graph.
-Still, in the auxiliary accumulator function |acc| we avoid recalculating
-a cell if it was already calculated in this pass as a dependency of a previous
-cell.
+When we process an event in |runEvent|, we need to update the cells entered
+and then perform the necessary recalculations. Since we are not concerned with
+performance and formulas are in principle purely functional (which is not true
+in real-world spreadsheets due to functions such as @TODAY@ which accesses the
+system clock, but is true in our interpreter), we simply discard the previous
+map of values and recompute all cells in the worksheet. One way to avoid this
+computational expense would be to maintain data structures that keep track of
+reverse dependencies for each cell, but we avoid this optimization here for
+simplicity. Real-world spreadsheets further restrict the recalculation by
+limiting it to cells which are currently visible in their user
+interface.\footnote{We were able to empirically verify this when we produced a
+spreadsheet with a formula that crashed LibreOffice. The application only
+crashed when the offending cell was scrolled into view.}
+
+Still, in the auxiliary accumulator function |acc| we avoid recalculating a
+cell if it was already calculated in this pass as a dependency of a previous
+cell. Also, we keep track of which cells are currently being visited for
+detecting circular references.
 
 \begin{code}
 runEvent :: XlState -> XlEvent -> XlState
@@ -169,21 +248,20 @@ updateCells cells event@(XlSetArrayFormula rcFrom rcTo formula) =
          rowOp _ r (cells, (x, y))  = (cells, (0, y + 1))
 \end{code}
 
-To fold over a range, we use a custom folding function, which takes the base
-coordinate and the addresses for the edges of the range, a zero-value for the
-fold, an initializer function for each row, an accumulator function to run on
-each cell, and another function to run as each row is completed.
+To iterate over ranges, we use a custom folding function, which loops over
+the 2-dimensional range applying two accumulator functions: one which runs on
+each cell, and one that runs as each row is completed.
 
 \begin{code}
 foldRange ::  XlRC -> XlRC -> XlRC     -- base coordinate and addresses for the range
-              -> r                     -- a zero-value for the fold
+              -> r                     -- a zero-value for the fold as a whole
               -> (r -> c)              -- an initializer function for each row
               -> (c -> XlRC -> c)      -- accumulator function to run on each cell
-              -> (r -> Int -> c -> r)  -- function to run as each row completes
+              -> (r -> Int -> c -> r)  -- accumulator function to run on each complete row
               -> r
 foldRange rc from to zero zeroRow cellOp rowOp =
    let
-      (minR, minC, maxR, maxC) = getRCs rc from to
+      (minR, minC, maxR, maxC) = minMaxRCs rc from to
       handleRow accRow r = rowOp accRow r valRow
          where
             handleCell accCell c = cellOp accCell (XlRC (XlAbs r) (XlAbs c))
@@ -192,17 +270,45 @@ foldRange rc from to zero zeroRow cellOp rowOp =
       foldl' handleRow zero [minR..maxR]
 \end{code}
 
+It is important to note that for array formulas, |updateCells| expands a
+single array formula spanning a range of cells into a number of individual
+|XlAFCell| entries in the |cells| map, each of them containing the $(x, y)$
+coordinates to indicate their relative position in the rectangular range to
+which the array formula was applied. 
+
+This makes two important assumptions. First, that we will able later to
+compute each position of an array formula individually. This assumption is not
+critical. At worst, it would wasteful in cases such as matrix multiplication,
+where each cell would cause the whole matrix to be calculated and then
+converted down to the scalar corresponding to the cell's position. 
+
+The second assumption is that the computation of a given position $(x, y)$ in
+an array formula's range is independent of the total size of the range as
+specified when the user selects a range when entering the array formula. In
+general, this assumption holds in spreadsheet applications, but we were able
+to identify corner cases in Excel where an array formula returns different
+results when entered in a single cell versus being entered in a range. For
+example, assuming @A1@ contains the string @C1@, @B1@ contains the string
+@D1@, @C1@ contains @9@ and @D1@ contains @16@, entering
+@=SQRT(INDIRECT(A1:B1))@ in cell @E2@ results in the value @3@; but entering
+the same formula with the range @E2:F2@ selected causes the value of both
+cells to be @#VALUE!@. In LibreOffice (and in our interpreter), they evaluate
+to @3@ and @4@. By behaving differently according to the range size selected
+during initial entry, Excel adds a dependency to the calculation of cells that
+is invisible in its UI. We avoid this by using calculation strategies
+similar to those in LibreOffice and Google Sheets.
+
 \section{Utility functions}
 
-A few utility functions for addresses are used throughout the interpreter. We
+A few utility functions for manipulating coordinates are used throughout the interpreter. We
 will quickly introduce them here.
 
-Function |getRCs| obtains the top-left and bottom-right absolute coordinates
+Function |minMaxRCs| obtains the top-left and bottom-right absolute coordinates
 of a range, given two opposite edge addresses and a base absolute address.
 
 \begin{code}
-getRCs :: XlRC -> XlRC -> XlRC -> (Int, Int, Int, Int)
-getRCs myRC rcFrom rcTo =
+minMaxRCs :: XlRC -> XlRC -> XlRC -> (Int, Int, Int, Int)
+minMaxRCs myRC rcFrom rcTo =
    let
       XlRC (XlAbs fromR) (XlAbs fromC)  = toAbs myRC rcFrom
       XlRC (XlAbs toR)   (XlAbs toC)    = toAbs myRC rcTo
@@ -214,23 +320,23 @@ getRCs myRC rcFrom rcTo =
       (minR, minC, maxR, maxC)
 \end{code}
 
-Function |toAbs| converts a relative address to an absolute one, based on a
-base absolute address.
+Function |toAbs| converts a relative address to an absolute one, using another
+absolute address as a reference.
 
 \begin{code}
 
 toAbs :: XlRC -> XlRC -> XlRC
-toAbs base@(XlRC br bc) cell@(XlRC cr cc) = XlRC (toAbsAddr br cr) (toAbsAddr bc cc)
+toAbs ref@(XlRC rb cb) cell@(XlRC r c) = XlRC (absAddr rb r) (absAddr cb c)
    where 
-      toAbsAddr :: XlAddr -> XlAddr -> XlAddr
-      toAbsAddr  _               c@(XlAbs _)  = c
-      toAbsAddr  (XlAbs b)       (XlRel c)    = XlAbs (b + c)
-      toAbsAddr  b@(XlRel _)     _            = error ("base in toAbs must be absolute, got " ++ show b)
+      absAddr :: XlAddr -> XlAddr -> XlAddr
+      absAddr  _               c@(XlAbs _)  = c
+      absAddr  (XlAbs b)       (XlRel c)    = XlAbs (b + c)
+      absAddr  b@(XlRel _)     _            = error ("toAbs: ref must be absolute, got " ++ show b)
 
 \end{code}
 
 Function |toRC| converts Excel-style addresses in ``A1'' alphanumeric format
-to the internal row-column numeric format. (For simplicity, we support only
+to the internal row-column numeric format. (For simplicity, we only support
 rows A to Z.)
 
 \begin{code}
@@ -241,11 +347,11 @@ toRC (l:num) = XlRC (XlAbs ((read num) - 1)) (XlAbs ((ord l) - 65))
 \section{Calculating cells}
 
 To calculate the value of a cell we evaluate the cell's formula, potentially
-recursing to evaluate other cells that formula. The |calcCell| takes as
-arguments a set of cell addresses currently being recursively visited (to
-detect cycles), the table of cell formulas, the current table of values, the
-base address of the cell and the cell to compute. The function produces the
-calculated value of the cell along with the map of all values, since other
+recursing to evaluate other cells referenced by that formula. The |calcCell|
+takes as arguments a set of cell addresses currently being recursively visited
+(to detect cycles), the table of cell formulas, the current table of values,
+the base address of the cell and the cell to compute. The function produces
+the calculated value of the cell along with the map of all values, since other
 calls may have been computed along the way). 
 
 \begin{code}
@@ -254,20 +360,28 @@ calcCell :: Set XlRC -> XlCells -> XlValues -> XlRC -> XlCell -> (XlValue, XlVal
 
 \end{code}
 
-A major complicator in the semantics of a spreadsheet application is the
+A major complication in the semantics of a spreadsheet application is the
 fact that there are two distinct modes of evaluation: one for regular formulas,
 and one for array formulas. Further, different kinds of functions in formulas
 evaluate their arguments in different ways: borrowing from the terminology
 of the language Perl, some functions evaluate their arguments in a scalar
 context (that is, they expect their arguments to produce a scalar value),
 and some evaluate arguments in an array context. This gives us four evaluation
-functions in total.
+rules in total.
 
-To represent an evaluation mode, we define a data type |XlEvaluator| which,
-besides carrying a few context values for convenience, includes a coercion
-function |toScalar| to obtain a scalar function according to the context of a
-cell (as we will see in more detail below), and two evaluation functions, one
-for each of the possible evaluation contexts: |array| and |scalar|.
+This is the core of the incompatibility between spreadsheet formula languages.
+As our examples [earlier in the thesis] demonstrate, each application applies
+a different set of rules as to when to switch to array evaluation, and to what
+to do in each evaluation mode. In our implementation, we modularized these
+decisions into a number of functions implementing different ways of evaluating
+a formula, in array and scalar contexts.
+
+Then, to represent an evaluation mode, we define a data type |XlEvaluator|
+which, besides carrying a few context values for convenience, includes a
+coercion function |toScalar| to obtain a scalar function according to the
+context of a cell (as we will see in more detail below), and two evaluation
+functions, one for each of the possible evaluation contexts: |array| and
+|scalar|.
 
 \begin{code}
 
@@ -282,6 +396,15 @@ data XlEvaluator = XlEvaluator {
 }
 
 \end{code}
+
+Note that the presence of different evaluation rules affects not only array
+formulas. As illustrated in [Figure], Excel performs array-style evaluation in
+sub-formulas for certain functions even when not in array formula mode.
+
+We opted to implement evaluation functions that follow the OpenDocument
+specification. With this, we achieved a good (but not full) degree of
+compatibility with LibreOffice in the subset of spreadsheet features
+implemented in this interpreter.
 
 When calculating a regular formula, we define a ``simple'' evaluator and
 trigger the scalar evaluation function on the formula.
@@ -362,26 +485,47 @@ simpleArrayEvaluator ev values formula =
 
 \subsubsection{Coercion to scalar}
 
+When a function expects a scalar argument and is given a non-scalar such as a
+literal matrix or a range, coercion is attempted.
+
+For array literals, element $(0, 0)$ is returned. Empty arrays have
+inconsistent behavior across spreadsheets. Here, we simply return the @#REF!@
+error, replicating the behavior of Google Sheets. When given an empty arrays,
+Excel rejects the formula, pops a message box alerting the user and does not
+accept the entry. Excel Online does not display a message, but marks the cell
+with a red dashed border. LibreOffice exhibits a very inconsistent behavior:
+an empty cell by itself displays as an empty cell; @=10/{}@ evaluates to
+@#VALUE!@ but both @=ABS({})@ and @=ABS(10/{})@ evaluate to @0@, but
+@=ABS(A1)@ where A1 is @{}@) evaluates to @#VALUE!@.
+
+For ranges,the resulting value depends on the shape of the range and position
+where the formula was entered. If the range is a vertical ($n \times 1$) or
+horizontal ($1 \times n$) array, the evaluation follows an "intersection"
+rule: the value returned is that of the element of the range that is aligned
+in the perpendicular direction with the position of the formula. For example,
+for a formula in cell @G5@ that references @A1@ in a scalar context, the value
+in @A5@ will be returned. Likewise, if that same cell references @E1:K1@, the
+value obtained will be that in cell @G1@. If there is no intersection or if
+the range has any other shape, @#VALUE!@ is returned.
+
 \begin{code} 
 
--- 3.3) Non-Scalar Evaluation (aka 'Array expressions') [page 27]
--- 1) Evaluation as an implicit intersection of the argument with the expression's evaluation position.
 intersectScalar :: XlRC -> Int -> Int -> XlFormula -> XlFormula
 intersectScalar myRC@(XlRC (XlAbs r) (XlAbs c)) _ _ formula =
    case formula of
-      XlLit (XlMatrix [])   -> XlLit (XlNumber 0) -- undocumented behavior of LibreOffice
-      XlLit (XlMatrix [[]]) -> XlLit (XlNumber 0) -- undocumented behavior of LibreOffice
-      XlLit (XlMatrix mtx)  -> XlLit (head (head mtx)) -- 1.1) Inline Arrays: Element (0;0) of the array is used in the place of the array.
+      XlLit (XlMatrix [])   -> XlLit (XlError "#REF!")
+      XlLit (XlMatrix [[]]) -> XlLit (XlError "#REF!")
+      XlLit (XlMatrix mtx)  -> XlLit (head (head mtx))
       XlRng rcFrom rcTo ->
          let
-            (fromR, fromC, toR, toC) = getRCs myRC rcFrom rcTo
+            (fromR, fromC, toR, toC) = minMaxRCs myRC rcFrom rcTo
          in
-            if fromC == toC -- 1.2.1) If the target reference is a row-vector (Nx1) use the value at the intersection of the evaluation position's column and the reference's row.
+            if fromC == toC
             then
                if (r >= fromR) && (r <= toR)
                then XlRef (XlRC (XlAbs r) (XlAbs fromC))
-               else XlLit (XlError "#VALUE!") -- Note 2: If there is no intersection the result is \texttt{\#VALUE!}
-            else if fromR == toR -- 1.2.2) If the target reference is a column-vector (1xM) the value at the intersection of the evaluation position's row and the reference's column.
+               else XlLit (XlError "#VALUE!")
+            else if fromR == toR
             then
                if (c >= fromC) && (c <= toC)
                then XlRef (XlRC (XlAbs fromR) (XlAbs c))
@@ -442,7 +586,7 @@ iterateFormula ev values (XlFun name args) =
             getY mx (XlLit (XlMatrix mtx))  = max mx (length mtx)
             getY mx (XlRng rcFrom rcTo)     = max mx (1 + toR - fromR)
                where
-                  (fromR, fromC, toR, toC) = getRCs (rc ev) rcFrom rcTo
+                  (fromR, fromC, toR, toC) = minMaxRCs (rc ev) rcFrom rcTo
             getY mx _ = mx
       maxX :: Int
       maxX = foldl getX 1 args
@@ -453,7 +597,7 @@ iterateFormula ev values (XlFun name args) =
                   maxRowLength mtx = foldl (\mx' row -> max mx' (length row)) 1 mtx
             getX mx (XlRng rcFrom rcTo) = max mx (1 + toC - fromC)
                where
-                  (fromR, fromC, toR, toC) = getRCs (rc ev) rcFrom rcTo
+                  (fromR, fromC, toR, toC) = minMaxRCs (rc ev) rcFrom rcTo
             getX mx _ = mx
       doRow :: ([[XlValue]], XlValues) -> Int -> ([[XlValue]], XlValues)
       doRow (mtx, values) y = appendTo mtx $ foldl doCell ([], values) [0..maxX-1]
@@ -482,7 +626,7 @@ matrixToScalar myRC x y formula =
                      (\x y ->
                         XlRef (XlRC (XlAbs (fromR + y)) (XlAbs (fromC + x))))
             where 
-               (fromR, fromC, toR, toC) = getRCs myRC rcFrom rcTo
+               (fromR, fromC, toR, toC) = minMaxRCs myRC rcFrom rcTo
       f -> f
    where
       -- 2.1) The portion of a non-scalar result to be displayed need not be co-extensive with a
@@ -504,7 +648,7 @@ matrixToScalar myRC x y formula =
          -- the value of the first row.
          else if sizeY == 1 && y > 0
          then getXY x 0
-         -- 2.1.4) If none of the other rules apply \texttt{\#N/A}
+         -- 2.1.4) If none of the other rules apply @#N/A@
          else XlLit $ XlError "#N/A"
 
 \end{code}
