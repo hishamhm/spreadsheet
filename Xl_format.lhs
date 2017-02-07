@@ -16,7 +16,7 @@
 %format accRow = "acc_{row}"
 %format accCell = "acc_{cell}"
 %format zeroRow = "zero_{row}"
-%format valRow = "val_{row}"
+%format vRow = "v_{row}"
 %format maxRow = "r_{max}"
 %format maxCol = "c_{max}"
 %format (XlRC r c) = "\llparenthesis " r ", " c "\rrparenthesis "
@@ -33,13 +33,13 @@
 %format na = "n_a"
 %format nb = "n_b"
 %format vsa = "vs_a"
+%format vsi = "vs_{i}"
+%format vsm = "vs_{m}"
 %format vsr = "vs_r"
+%format vsacc = "vs_{acc}"
 %format vstr = "v_{str}"
 %format vstart = "v_{start}"
 %format vlen = "v_{len}"
-%format vsacc = "vs_{acc}"
-%format vsi = "vs_{i}"
-%format vsm = "vs_{m}"
 %format vstr'
 %format vstart'
 %format vlen'
