@@ -29,7 +29,7 @@ This implementation uses only standard modules included in the Haskell Platform:
 
 module XlInterpreter where
 
-import Data.Char (ord, chr)
+import Data.Char (ord, chr, toUpper)
 import Data.Fixed
 import Data.List (foldl')
 import Data.Map.Strict as Map (Map, foldlWithKey, member, insert, empty, lookup)
@@ -106,7 +106,9 @@ data XlFormula  =  XlLit  XlValue
 Finally, values are numbers, strings, booleans, errors and matrices of
 literals. We represent all matrices as 2-dimensional, stored as a list of
 lists, which each inner list representing a row (a unidimensional array is a
-2-dimensional matrix with a single row).
+2-dimensional matrix with a single row). We also have a special value
+for an empty cell, because it has special coercion rules (implemented in
+Section~\ref{typeconv}.
 
 \begin{code}
 
@@ -115,6 +117,7 @@ data XlValue  =  XlNumber   Double
               |  XlBoolean  Bool
               |  XlError    String
               |  XlMatrix   [[XlValue]]
+              |  XlEmpty
    deriving Eq
 
 \end{code}
@@ -141,6 +144,7 @@ instance Show XlValue where
    show (XlBoolean b) = show b
    show (XlError e)   = show e
    show (XlMatrix m)  = show m
+   show XlEmpty       = ""
 
 instance Show XlAddr where
    show (XlAbs n) = show n
@@ -254,16 +258,22 @@ To iterate over ranges, we use a custom folding function, which loops over
 the 2-dimensional range applying two accumulator functions: one which runs on
 each cell, and one that runs as each row is completed.
 
+Whenever the interpreter uses ranges, it needs to ensure that they are
+normalized as absolute coordinates with the top-left cell first and the
+bottom-right cell second. When relative addresses are given, this is
+calculated relative to the address of the cell being evaluated, which
+we will refer throughout as the cell's position.
+
 \begin{code}
-foldRange ::  XlRC -> XlRC -> XlRC     -- base coordinate and addresses for the range
+foldRange ::  XlRC -> XlRC -> XlRC     -- cell position and addresses for the range
               -> r                     -- a zero-value for the fold as a whole
               -> (r -> c)              -- an initializer function for each row
               -> (c -> XlRC -> c)      -- accumulator function to run on each cell
               -> (r -> Int -> c -> r)  -- accumulator function to run on each complete row
               -> r
-foldRange rc from to zero zeroRow cellOp rowOp =
+foldRange pos rcFrom rcTo zero zeroRow cellOp rowOp =
    let
-      (minR, minC, maxR, maxC) = minMaxRCs rc from to
+      (minR, minC, maxR, maxC) = minMaxRCs pos rcFrom rcTo
       handleRow accRow r = rowOp accRow r vRow
          where
             handleCell accCell c = cellOp accCell (XlRC (XlAbs r) (XlAbs c))
@@ -302,18 +312,18 @@ calculation strategies similar to those in LibreOffice and Google Sheets.
 
 \section{Utility functions}
 
-A few utility functions for manipulating coordinates are used throughout the interpreter. We
-will quickly introduce them here.
+A few utility functions for manipulating coordinates are used throughout the
+interpreter. We will quickly introduce them here.
 
 Function |minMaxRCs| obtains the top-left and bottom-right absolute coordinates
-of a range, given two opposite edge addresses and a base absolute address.
+of a range, given the cell position and two opposite edge addresses.
 
 \begin{code}
 minMaxRCs :: XlRC -> XlRC -> XlRC -> (Int, Int, Int, Int)
-minMaxRCs myRC rcFrom rcTo =
+minMaxRCs pos rcFrom rcTo =
    let
-      XlRC (XlAbs fromR) (XlAbs fromC)  = toAbs myRC rcFrom
-      XlRC (XlAbs toR)   (XlAbs toC)    = toAbs myRC rcTo
+      XlRC (XlAbs fromR) (XlAbs fromC)  = toAbs pos rcFrom
+      XlRC (XlAbs toR)   (XlAbs toC)    = toAbs pos rcTo
       minR  = min  fromR  toR
       maxR  = max  fromR  toR
       minC  = min  fromC  toC
@@ -353,7 +363,7 @@ To determine the value of a cell, the interpreter evaluates the cell's
 formula, potentially recursing to evaluate other cells referenced by that
 formula. The |calcCell| takes as arguments a set of cell addresses currently
 being recursively visited (to detect cycles), the table of cell formulas, the
-current table of values, the base address of the cell and the cell to compute.
+current table of values, the cell position and the actual cell to compute.
 The function produces the calculated value of the cell along with the map of
 all values, since other calls may have been computed along the way). 
 
@@ -389,7 +399,7 @@ evaluation functions, one for each of the possible evaluation contexts:
 \begin{code}
 
 data XlEvaluator = XlEvaluator {
-   eRC        :: XlRC,
+   ePos        :: XlRC,
    eXY        :: (Int, Int),
    eVisiting  :: Set XlRC,
    eCells     :: XlCells,
@@ -418,11 +428,11 @@ function on the formula.
 
 \begin{code}
 
-calcCell visiting cells vs myRC@(XlRC (XlAbs r) (XlAbs c)) (XlCell formula) =
+calcCell visiting cells vs pos@(XlRC (XlAbs r) (XlAbs c)) (XlCell formula) =
    evalScalarFormula ev vs formula
    where
       ev = XlEvaluator {
-         eRC = myRC,
+         ePos = pos,
          eXY = (0, 0),
          eCells = cells,
          eVisiting = visiting,
@@ -446,11 +456,11 @@ that a scalar value is ultimately displayed in the cell.
 
 \begin{code}
 
-calcCell visiting cells vs myRC (XlAFCell formula (x, y)) =
+calcCell visiting cells vs pos (XlAFCell formula (x, y)) =
    scalarize ev $ (eScalar ev) ev vs formula
    where
       ev = XlEvaluator {
-         eRC = myRC,
+         ePos = pos,
          eXY = (x, y),
          eCells = cells,
          eVisiting = visiting,
@@ -462,7 +472,7 @@ calcCell visiting cells vs myRC (XlAFCell formula (x, y)) =
 scalarize :: XlEvaluator -> (XlValue, XlValues) -> (XlValue, XlValues)
 scalarize ev (v, vs) = (v', vs)
    where
-      (XlLit v') = matrixToScalar (eRC ev) (eXY ev) (XlLit v)
+      (XlLit v') = matrixToScalar (ePos ev) (eXY ev) (XlLit v)
 
 \end{code}
 
@@ -478,7 +488,7 @@ scalar. If it is a scalar or a function, it will be evaluated as-is.
 evalScalarFormula ev vs formula =
    evalFormula ev vs formula'
    where
-      formula' = (eToScalar ev) (eRC ev) (eXY ev) formula
+      formula' = (eToScalar ev) (ePos ev) (eXY ev) formula
 
 \end{code}
 
@@ -508,13 +518,13 @@ the range has any other shape, @#VALUE!@ is returned.
 \begin{code} 
 
 intersectScalar :: XlRC -> (Int, Int) -> XlFormula -> XlFormula
-intersectScalar myRC@(XlRC (XlAbs r) (XlAbs c)) _ formula =
+intersectScalar pos@(XlRC (XlAbs r) (XlAbs c)) _ formula =
    case formula of
    XlLit (XlMatrix [])    -> XlLit (XlError "#REF!")
    XlLit (XlMatrix [[]])  -> XlLit (XlError "#REF!")
    XlLit (XlMatrix m)     -> XlLit (head (head m))
    XlRng rcFrom rcTo      ->
-      case minMaxRCs myRC rcFrom rcTo of
+      case minMaxRCs pos rcFrom rcTo of
       (fromR, fromC, toR, toC) 
          | (fromC == toC) && (r >= fromR) && (r <= toR)  -> XlRef (XlRC (XlAbs r) (XlAbs fromC))
          | (fromR == toR) && (c >= fromC) && (c <= toC)  -> XlRef (XlRC (XlAbs fromR) (XlAbs c))
@@ -549,7 +559,7 @@ these rules; Google Sheets does not.
 \begin{code} 
 
 matrixToScalar :: XlRC -> (Int, Int) -> XlFormula -> XlFormula
-matrixToScalar myRC (x, y) f =
+matrixToScalar pos (x, y) f =
    case f of
       XlLit (XlMatrix m) ->
          displayRule x y (foldl' max 0 (map length m)) (length m)
@@ -558,7 +568,7 @@ matrixToScalar myRC (x, y) f =
          displayRule x y (1 + toC - fromC) (1 + toR - fromR)
                      (\x y -> XlRef (XlRC (XlAbs (fromR + y)) (XlAbs (fromC + x))))
             where
-               (fromR, fromC, toR, toC) = minMaxRCs myRC rcFrom rcTo
+               (fromR, fromC, toR, toC) = minMaxRCs pos rcFrom rcTo
       f -> f
    where
       displayRule :: Int -> Int -> Int -> Int -> (Int -> Int -> XlFormula) -> XlFormula
@@ -595,25 +605,25 @@ iterateFormula ev vs (XlFun name args) =
             getY a (XlLit (XlMatrix m))  = max a (length m)
             getY a (XlRng rcFrom rcTo)   = max a (1 + toR - fromR)
                where
-                  (fromR, fromC, toR, toC) = minMaxRCs (eRC ev) rcFrom rcTo
+                  (fromR, _, toR, _) = minMaxRCs (ePos ev) rcFrom rcTo
             getY a _ = a
       maxX = foldl' getX 1 args
          where
             getX a (XlLit (XlMatrix m)) = max a (maxRowLength m)
                where
                   maxRowLength :: [[XlValue]] -> Int
-                  maxRowLength m = foldl (\a' row -> max a' (length row)) 1 m
+                  maxRowLength m = foldl' (\a' row -> max a' (length row)) 1 m
             getX a (XlRng rcFrom rcTo) = max a (1 + toC - fromC)
                where
-                  (fromR, fromC, toR, toC) = minMaxRCs (eRC ev) rcFrom rcTo
+                  (_, fromC, _, toC) = minMaxRCs (ePos ev) rcFrom rcTo
             getX a _ = a
       doRow :: ([[XlValue]], XlValues) -> Int -> ([[XlValue]], XlValues)
-      doRow (m, vs) y = appendTo m $ foldl doCell ([], vs) [0..maxX-1]
+      doRow (m, vs) y = appendTo m $ foldl' doCell ([], vs) [0..maxX-1]
          where
             doCell :: ([XlValue], XlValues) -> Int -> ([XlValue], XlValues)
             doCell (row, vs) x = appendTo row $ evalFormula ev vs f'
                where
-                  f' = XlFun name (map ((eToScalar ev) (eRC ev) (x, y)) args)
+                  f' = XlFun name (map ((eToScalar ev) (ePos ev) (x, y)) args)
             appendTo xs (v, vs) = (xs ++ [v], vs)
 
 iterateFormula ev vs f = evalFormula ev vs f
@@ -622,33 +632,50 @@ iterateFormula ev vs f = evalFormula ev vs f
 
 \section{Operations}
 
+The last part of the interpreter is function |evalFormula|, which implements
+the evaluation of the individual operations in the textual formula language.
+Given an evaluator, the current map of values, and a formula, it produces
+the calculated value of the formula and a new map of values (since other
+cells may be calculated as part of the evaluation of this formula).
+
 \begin{code}
 evalFormula :: XlEvaluator -> XlValues -> XlFormula -> (XlValue, XlValues)
 \end{code}
 
-\subsubsection{Literals}
+The function |evalFormula| implements the various language constructs as
+follows.
+
+\subsubsection{Literals, references and ranges}
+
+When a formula is just a literal, its value |v| is returned and the
+map of cell values |vs| remains unchanged.
 
 \begin{code}
-evalFormula ev vs (XlLit v) =
-   (v, Map.insert (eRC ev) v vs)
+evalFormula ev vs (XlLit v) = (v, vs)
 \end{code}
 
-\subsubsection{References}
+When a formula is a reference to another cell, |evalFormula| first converts
+the reference address to its absolute value relative to the cell's position.
+Then, it detects circular references by checking the |eVisiting| set of the
+evaluator. If the reference is valid, it checks in |vs| if the value was
+already calculated. If the cell is unset, we return the special value
+|XlEmpty|. Finally, if the cell contains a formula which needs to be
+calculated, we calculate it with |calcCell| and store the resulting value in
+an updated map, |vs''|.
 
 \begin{code}
 evalFormula ev vs (XlRef ref') =
    let
-      ref = toAbs (eRC ev) ref'
-      ret v = (v, Map.insert (eRC ev) v vs)
+      ref = toAbs (ePos ev) ref'
    in
       if ref `Set.member` (eVisiting ev)
-      then ret (XlError "#LOOP!")
+      then (XlError "#LOOP!", vs)
       else 
          case Map.lookup ref vs of
-         Just v   -> ret v
+         Just v   -> (v, vs)
          Nothing  ->
             case Map.lookup ref (eCells ev) of
-            Nothing    -> ret (XlNumber 0)
+            Nothing    -> (XlEmpty, vs)
             Just cell  -> 
                let
                   (v', vs') = calcCell (Set.insert ref (eVisiting ev)) (eCells ev) vs ref cell
@@ -657,12 +684,14 @@ evalFormula ev vs (XlRef ref') =
                   (v', vs'')
 \end{code}
 
-\subsubsection{Ranges}
+For evaluating ranges, |evalFormula| uses |foldRange| to iterate over the
+range, invoking the scalar evaluation function (|eScalar|) for each element,
+producing a matrix of values.
 
 \begin{code}
 evalFormula ev vs (XlRng from to) = 
    let
-      (m, vs') = foldRange (eRC ev) from to ([], vs) zeroRow cellOp rowOp
+      (m, vs') = foldRange (ePos ev) from to ([], vs) zeroRow cellOp rowOp
          where
             zeroRow :: ([[XlValue]], XlValues) -> ([XlValue], XlValues)
             zeroRow (_, vs) = ([], vs)
@@ -680,18 +709,44 @@ evalFormula ev vs (XlRng from to) =
 
 \subsubsection{\texttt{IF}}
 
+The @IF@ function takes three arguments. It tests the first argument, and if evaluates
+to |XlBoolean True| it evaluates the second argument and returns it; otherwise, it
+evaluates and returns the third argument. Note that arguments are evaluated lazily,
+as is typical in constructs of this type in programming languages.
+
 \begin{code}
 evalFormula ev vs (XlFun "IF" [i, t, e]) =
    let
-      (vi, vsi) = toNumber $ (eScalar ev) ev vs i
+      (vi, vsi) = toBoolean $ (eScalar ev) ev vs i
       (vr, vsr) = 
          case vi of
-         (XlError _)   -> (vi, vsi)
-         (XlNumber 0)  -> (eScalar ev) ev vsi e
-         (XlNumber _)  -> (eScalar ev) ev vsi t
-         _             -> ((XlError "#VALUE!"), vsi)
+         (XlError _)       -> (vi, vsi)
+         (XlBoolean True)  -> (eScalar ev) ev vsi e
+         (XlBoolean False) -> (eScalar ev) ev vsi t
+         _                 -> ((XlError "#VALUE!"), vsi)
    in
       (vr, vsr)
+
+\end{code}
+
+The @OR@ function in spreadsheets, on the other hand, is evaluated strictly,
+not performing the usual short-circuit expected of the ``or'' operator. It
+evaluates both arguments, and returns and error if either argument fails, or
+|XlBoolean True| if one of them is true.
+
+\begin{code}
+evalFormula ev vs (XlFun "OR" [a, b]) =
+   let
+      (va, vs')  = toBoolean $ (eScalar ev) ev vs a
+      (vb, vs'') = toBoolean $ (eScalar ev) ev vs' b
+      vr = case (va, vb) of
+           (XlError _, _)       -> va
+           (_, XlError _)       -> vb
+           (XlBoolean True, _)  -> va
+           (_, XlBoolean True)  -> vb
+           _                    -> XlBoolean False
+   in
+      (vr, vs'')
 
 \end{code}
 
@@ -826,54 +881,6 @@ evalFormula ev vs (XlFun _ _) = (XlError "#NAME?", vs)
 
 \end{code}
 
-\subsection{Type conversions}
-
-Function |num2str| is a converter that presents rational and integer values
-in their preferred notation (that is, with and without a decimal point,
-respectively). Function |bool2num| converts booleans to 0 or 1.
-
-\begin{code}
-num2str :: Double -> String
-num2str n = if fromIntegral (floor n) /= n then show n else show (floor n)
-
-bool2num :: Bool -> Double
-bool2num b = if b == True then 1 else 0
-\end{code}
-
-Functions |toNumber| and |toString| attempt to convert a value to the
-specified type, producing a |XlError| value if its is not convertible.
-
-\begin{code}
-toNumber :: (XlValue, XlValues) -> (XlValue, XlValues)
-toNumber (v, vs) = (coerce v, vs)
-   where
-      coerce (XlString s)     = case reads s :: [(Double, String)] of
-                                       []       -> XlError "#VALUE!"
-                                       [(n,_)]  -> XlNumber n
-      coerce (XlBoolean b)    = XlNumber (bool2num b)
-      coerce (XlMatrix _)     = XlError "#VALUE!"
-      coerce v                = v
-
-toString :: (XlValue, XlValues) -> (XlValue, XlValues)
-toString (v, vs) = (coerce v, vs)
-   where
-      coerce (XlNumber n)    = XlString (num2str n)
-      coerce (XlBoolean b)   = XlString (if b == True then "1" else "0")
-      coerce (XlMatrix _)    = XlError "#VALUE!"
-      coerce v               = v
-\end{code}
-
-Function |checkErr| checks input values for errors before performing
-a binary operation. The order errors are evaluated is relevant: if
-the first argument contains an error, it takes precedence.
-
-\begin{code}
-checkErr :: (XlValue -> XlValue -> XlValue) -> XlValue -> XlValue -> XlValue
-checkErr op e@(XlError _)  _              = e
-checkErr op _              e@(XlError _)  = e
-checkErr op a              b              = op a b
-\end{code}
-
 These are convenience functions that encapsulate the pattern for common
 unary and binary numeric functions.
 
@@ -903,6 +910,70 @@ unOp op ev vs v =
             _              -> XlError "#VALUE!"
    in
       (v'', vs')
+\end{code}
+
+\subsection{Type conversions}
+\label{typeconv}
+
+Function |num2str| is a converter that presents rational and integer values
+in their preferred notation (that is, with and without a decimal point,
+respectively). Function |bool2num| converts booleans to 0 or 1.
+
+\begin{code}
+num2str :: Double -> String
+num2str n = if fromIntegral (floor n) /= n then show n else show (floor n)
+
+bool2num :: Bool -> Double
+bool2num b = if b == True then 1 else 0
+\end{code}
+
+Functions |toNumber| and |toString| attempt to convert a value to the
+specified type, producing a |XlError| value if its is not convertible.
+
+\begin{code}
+toNumber :: (XlValue, XlValues) -> (XlValue, XlValues)
+toNumber (v, vs) = (coerce v, vs)
+   where
+      coerce (XlString s)     = case reads s :: [(Double, String)] of
+                                       []       -> XlError "#VALUE!"
+                                       [(n,_)]  -> XlNumber n
+      coerce (XlBoolean b)    = XlNumber (bool2num b)
+      coerce (XlEmpty)        = XlNumber 0
+      coerce (XlMatrix _)     = XlError "#VALUE!"
+      coerce v                = v
+
+toString :: (XlValue, XlValues) -> (XlValue, XlValues)
+toString (v, vs) = (coerce v, vs)
+   where
+      coerce (XlNumber n)    = XlString (num2str n)
+      coerce (XlBoolean b)   = XlString (if b == True then "1" else "0")
+      coerce (XlEmpty)       = XlString ""
+      coerce (XlMatrix _)    = XlError "#VALUE!"
+      coerce v               = v
+
+toBoolean :: (XlValue, XlValues) -> (XlValue, XlValues)
+toBoolean (v, vs) = (coerce v, vs)
+   where
+      coerce (XlNumber 0)    = XlBoolean False
+      coerce (XlNumber _)    = XlBoolean True
+      coerce (XlString s)    = case map toUpper s of
+                                  "TRUE"  -> XlBoolean True
+                                  "FALSE" -> XlBoolean False
+                                  _       -> XlError "#VALUE!"
+      coerce (XlEmpty)       = XlBoolean False
+      coerce (XlMatrix _)    = XlError "#VALUE!"
+      coerce v               = v
+\end{code}
+
+Function |checkErr| checks input values for errors before performing
+a binary operation. The order errors are evaluated is relevant: if
+the first argument contains an error, it takes precedence.
+
+\begin{code}
+checkErr :: (XlValue -> XlValue -> XlValue) -> XlValue -> XlValue -> XlValue
+checkErr op e@(XlError _)  _              = e
+checkErr op _              e@(XlError _)  = e
+checkErr op a              b              = op a b
 \end{code}
 
 \end{document}

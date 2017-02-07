@@ -196,7 +196,7 @@ main =
             ]
          runTest "3.3 2 2.1 2.1.4) Note 6" [
             ( XlSetArrayFormula (toRC "A1") (toRC "B2") (nummtx [[1,2],[3,4],[5,6]]), XlNumber 1 ),
-            ( XlSetFormula (toRC "D1") (XlRef (toRC "B3")), XlNumber 0 )
+            ( XlSetFormula (toRC "D1") (XlRef (toRC "B3")), XlEmpty )
             ]
          runTest "3.3 2 2.2 2.2.1) Note 7 (oasis_note7.ods)" [
             ( XlSetFormula      (toRC "A1")             (num 10), XlNumber 10 ),
