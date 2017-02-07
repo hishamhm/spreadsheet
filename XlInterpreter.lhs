@@ -339,7 +339,7 @@ toAbs ref@(XlRC rb cb) cell@(XlRC r c) = XlRC (absAddr rb r) (absAddr cb c)
 
 Function |toRC| converts Excel-style addresses in ``A1'' alphanumeric format
 to the internal row-column numeric format. (For simplicity, we only support
-rows A to Z.)
+columns A to Z.)
 
 \begin{code}
 toRC :: String -> XlRC
@@ -347,6 +347,7 @@ toRC (l:num) = XlRC (XlAbs ((read num) - 1)) (XlAbs ((ord l) - 65))
 \end{code}
 
 \section{Calculating cells}
+\label{calccell}
 
 To calculate the value of a cell we evaluate the cell's formula, potentially
 recursing to evaluate other cells referenced by that formula. The |calcCell|
@@ -388,13 +389,13 @@ functions, one for each of the possible evaluation contexts: |array| and
 \begin{code}
 
 data XlEvaluator = XlEvaluator {
-   rc        :: XlRC,
-   xy        :: (Int, Int),
-   visiting  :: Set XlRC,
-   cells     :: XlCells,
-   toScalar  :: XlRC -> (Int, Int) -> XlFormula -> XlFormula,
-   array     :: XlEvaluator -> XlValues -> XlFormula -> (XlValue, XlValues),
-   scalar    :: XlEvaluator -> XlValues -> XlFormula -> (XlValue, XlValues)
+   eRC        :: XlRC,
+   eXY        :: (Int, Int),
+   eVisiting  :: Set XlRC,
+   eCells     :: XlCells,
+   eToScalar  :: XlRC -> (Int, Int) -> XlFormula -> XlFormula,
+   eArray     :: XlEvaluator -> XlValues -> XlFormula -> (XlValue, XlValues),
+   eScalar    :: XlEvaluator -> XlValues -> XlFormula -> (XlValue, XlValues)
 }
 
 \end{code}
@@ -408,79 +409,79 @@ specification. With this, we achieved a good (but not full) degree of
 compatibility with LibreOffice in the subset of spreadsheet features
 implemented in this interpreter.
 
-When calculating a regular formula, we define a ``simple'' evaluator and
-trigger the scalar evaluation function on the formula.
+For calculating the value of a regular cell, we define an evaluator that
+uses functions |intersectScalar| to convert non-scalar to scalars, 
+|evalScalarFormula| for evaluating scalar arguments, and |evalFormula|
+for evaluating non-scalar arguments. We will see the definition of these
+functions below. Once the evaluator is defined, we trigger the scalar
+evaluation function on the formula.
 
 \begin{code}
 
 calcCell visiting cells vs myRC@(XlRC (XlAbs r) (XlAbs c)) (XlCell formula) =
-   (scalar ev) ev vs formula
+   evalScalarFormula ev vs formula
    where
       ev = XlEvaluator {
-         rc = myRC,
-         xy = (0, 0),
-         cells = cells,
-         visiting = visiting,
-         toScalar = intersectScalar,
-         scalar = simpleScalarEvaluator,
-         array = simpleArrayEvaluator
+         eRC = myRC,
+         eXY = (0, 0),
+         eCells = cells,
+         eVisiting = visiting,
+         eToScalar = intersectScalar,
+         eScalar = evalScalarFormula,
+         eArray = evalFormula
       }
 
 \end{code}
 
-For calculating an array formula, we define a ``matrix'' evaluator. We also
-trigger the calculation by applying this mode's scalar evaluator, but we
-also filter the result value through a coercion function (|scalarize|),
-since we want a scalar value to present in the cell.
+For calculating cells marked as array formulas, we define a different
+evaluator. For coercing non-scalars into scalars, we will use a different
+function, |matrixToScalar|. For scalar evaluation of arguments, we will use
+the same |evalScalarFunction|, but for non-scalar evaluation, we will use
+|iterateFormula|. We also trigger the calculation by applying this mode's
+scalar evaluator, but we then filter the result value through a coercion
+function (|scalarize|), since we want to ensure that a scalar value is
+ultimately displayed in the cell.
 
 \begin{code}
 
 calcCell visiting cells vs myRC (XlAFCell formula (x, y)) =
-   scalarize ev $ (scalar ev) ev vs formula
+   scalarize ev $ (eScalar ev) ev vs formula
    where
       ev = XlEvaluator {
-         rc = myRC,
-         xy = (x, y),
-         cells = cells,
-         visiting = visiting,
-         toScalar = matrixToScalar,
-         scalar = matrixScalarEvaluator,
-         array = matrixArrayEvaluator
+         eRC = myRC,
+         eXY = (x, y),
+         eCells = cells,
+         eVisiting = visiting,
+         eToScalar = matrixToScalar,
+         eScalar = evalScalarFormula,
+         eArray = iterateFormula
       }
 
 scalarize :: XlEvaluator -> (XlValue, XlValues) -> (XlValue, XlValues)
 scalarize ev (v, vs) = (v', vs)
    where
-      (XlLit v') = matrixToScalar (rc ev) (xy ev) (XlLit v)
+      (XlLit v') = matrixToScalar (eRC ev) (eXY ev) (XlLit v)
 
 \end{code}
 
-\subsection{Simple cell evaluation}
+\subsection{Regular cell evaluation}
 
-\subsubsection{Scalar context evaluator}
+When we evaluate a formula in a scalar context, we run the evaluator's scalar
+conversion function on the formula prior to evaluating it. If the formula is
+an array or a range, it will be converted to a scalar. If it is a scalar
+or a function, it will be evaluated as-is.
 
 \begin{code}
 
-simpleScalarEvaluator ev vs formula =
+evalScalarFormula ev vs formula =
    evalFormula ev vs formula'
    where
-      formula' = (toScalar ev) (rc ev) (xy ev) formula
+      formula' = (eToScalar ev) (eRC ev) (eXY ev) formula
 
 \end{code}
 
-\subsubsection{Array context evaluator}
-
-\begin{code}
-
-simpleArrayEvaluator ev vs formula =
-   evalFormula ev vs formula
-
-\end{code}
-
-\subsubsection{Coercion to scalar}
-
-When a function expects a scalar argument and is given a non-scalar such as a
-literal matrix or a range, coercion is attempted.
+The conversion function for regular cells, |intersectScalar|, is defined as
+follows.
 
 For array literals, element $(0, 0)$ is returned. Empty arrays have
 inconsistent behavior across spreadsheets. Here, we simply return the @#REF!@
@@ -492,7 +493,7 @@ an empty cell by itself displays as an empty cell; @=10/{}@ evaluates to
 @#VALUE!@ but both @=ABS({})@ and @=ABS(10/{})@ evaluate to @0@, but
 @=ABS(A1)@ where A1 is @{}@) evaluates to @#VALUE!@.
 
-For ranges,the resulting value depends on the shape of the range and position
+For ranges, the resulting value depends on the shape of the range and position
 where the formula was entered. If the range is a vertical ($n \times 1$) or
 horizontal ($1 \times n$) array, the evaluation follows an "intersection"
 rule: the value returned is that of the element of the range that is aligned
@@ -507,138 +508,113 @@ the range has any other shape, @#VALUE!@ is returned.
 intersectScalar :: XlRC -> (Int, Int) -> XlFormula -> XlFormula
 intersectScalar myRC@(XlRC (XlAbs r) (XlAbs c)) _ formula =
    case formula of
-   XlLit (XlMatrix [])   -> XlLit (XlError "#REF!")
-   XlLit (XlMatrix [[]]) -> XlLit (XlError "#REF!")
-   XlLit (XlMatrix mtx)  -> XlLit (head (head mtx))
-   XlRng rcFrom rcTo ->
-      let
-         (fromR, fromC, toR, toC) = minMaxRCs myRC rcFrom rcTo
-      in
-         if fromC == toC
-         then
-            if (r >= fromR) && (r <= toR)
-            then XlRef (XlRC (XlAbs r) (XlAbs fromC))
-            else XlLit (XlError "#VALUE!")
-         else if fromR == toR
-         then
-            if (c >= fromC) && (c <= toC)
-            then XlRef (XlRC (XlAbs fromR) (XlAbs c))
-            else XlLit (XlError "#VALUE!")
-         else
-            XlLit (XlError "#VALUE!")
+   XlLit (XlMatrix [])    -> XlLit (XlError "#REF!")
+   XlLit (XlMatrix [[]])  -> XlLit (XlError "#REF!")
+   XlLit (XlMatrix m)     -> XlLit (head (head m))
+   XlRng rcFrom rcTo      ->
+      case minMaxRCs myRC rcFrom rcTo of
+      (fromR, fromC, toR, toC) 
+         | (fromC == toC) && (r >= fromR) && (r <= toR)  -> XlRef (XlRC (XlAbs r) (XlAbs fromC))
+         | (fromR == toR) && (c >= fromC) && (c <= toC)  -> XlRef (XlRC (XlAbs fromR) (XlAbs c))
+      _ -> XlLit (XlError "#VALUE!")
    f -> f
 
 \end{code}
 
-\subsection{Matrix cell evaluation}
+\subsection{Cell evaluation for array formulas}
 
-\subsubsection{Scalar context evaluator}
+When a cell is marked as an array formula, it follows a different evaluation
+process. As we saw in the definition of the array formula evaluator in
+function |calcCell| (Section~\ref{calccell}), for scalar contexts we use
+the same evaluation function as in regular cells, |evalScalarFormula|.
+However, in array formulas this function uses a different conversion function:
+|eToScalar| is defined as |matrixToScalar|.
 
-\begin{code}
+Function |matrixToScalar| extracts a scalar value from a non-scalar based
+on the position $(x, y)$ that the cell being evaluated has as part of the
+range for which the array formula was defined. This way, as we calculate
+cell values for each position of the range, each cell will extract a different
+value from non-scalars produced during the evaluation of the formula. For
+example, if we enter @=A1:B2@ as an array formula in range @D10:E11@,
+cell @D11@ is position $(1, 0)$ and will obtain the value of cell @B1@.
 
-matrixScalarEvaluator ev vs formula =
-   evalFormula ev vs formula'
+The area designated by the user for an array formula does not necessarily have
+the same dimensions as the non-scalar being displayed in it. The OpenDocument
+specification lists a series of rules for filling the exceeding cells,
+which we encode in the |displayRule| function. Excel and LibreOffice
+implement these rules; Google Sheets does not.
+
+\begin{code} 
+
+matrixToScalar :: XlRC -> (Int, Int) -> XlFormula -> XlFormula
+matrixToScalar myRC (x, y) f =
+   case f of
+      XlLit (XlMatrix m) ->
+         displayRule x y (foldl' max 0 (map length m)) (length m)
+                     (\x y -> XlLit $ m !! y !! x)
+      XlRng rcFrom rcTo ->
+         displayRule x y (1 + toC - fromC) (1 + toR - fromR)
+                     (\x y -> XlRef (XlRC (XlAbs (fromR + y)) (XlAbs (fromC + x))))
+            where
+               (fromR, fromC, toR, toC) = minMaxRCs myRC rcFrom rcTo
+      f -> f
    where
-      formula' = (toScalar ev) (rc ev) (xy ev) formula
-
+      displayRule :: Int -> Int -> Int -> Int -> (Int -> Int -> XlFormula) -> XlFormula
+      displayRule x y sizeX sizeY getXY 
+         | sizeX > x   &&  sizeY > y   = getXY x y
+         | sizeX == 1  &&  sizeY == 1  = getXY 0 0
+         | sizeX == 1  &&  x > 0       = getXY 0 y
+         | sizeY == 1  &&  y > 0       = getXY x 0
+         | otherwise                   = XlLit $ XlError "#N/A"
 \end{code}
 
-\subsubsection{Array context evaluator}
+Function |iterateFormula| implements the special evaluation mode for array
+formulas. When given a function where any argument is a range or a matrix, it
+produces a matrix with results, evaluating the formula in scalar context once
+for each cell, replacing the non-scalar argument with the scalar element
+corresponding to the cell position. It does this by first checking each
+argument and determining the maximum dimensions used by an argument (|maxX|
+and |maxY|). Then, we iterate through rows and columns, evaluating the
+function with a modified version of the list of arguments, in which 
+each non-scalar argument has been converted to scalar.
 
-\begin{code}
-
-matrixArrayEvaluator ev vs formula =
-   iterateFormula ev vs formula
-
-\end{code}
-
-Function |iterateFormula| takes a function where any argument is a range or a
-matrix, and produces a matrix with results, evaluating the formula in scalar context
-once for each cell, replacing the non-scalar argument with the scalar element
-corresponding to the cell position. If the given function has no non-scalar
-arguments, it is evaluated normally.
+If the given function has no non-scalar arguments, it is evaluated normally by
+|evalFormula|.
 
 \begin{code}
 iterateFormula :: XlEvaluator -> XlValues -> XlFormula -> (XlValue, XlValues)
 iterateFormula ev vs (XlFun name args) =
    if maxX > 1 || maxY > 1
-   then (\(m, v) -> (XlMatrix m, v)) $ foldl' doRow ([], vs) [0..maxY-1]
+   then (\(m, vs') -> (XlMatrix m, vs')) $ foldl' doRow ([], vs) [0..maxY-1]
    else evalFormula ev vs (XlFun name args)
    where
-      XlRC (XlAbs y) (XlAbs x) = rc ev
-      maxY :: Int
-      maxY = foldl getY 1 args
+      maxY = foldl' getY 1 args
          where
-            getY mx (XlLit (XlMatrix mtx))  = max mx (length mtx)
-            getY mx (XlRng rcFrom rcTo)     = max mx (1 + toR - fromR)
+            getY a (XlLit (XlMatrix m))  = max a (length m)
+            getY a (XlRng rcFrom rcTo)   = max a (1 + toR - fromR)
                where
-                  (fromR, fromC, toR, toC) = minMaxRCs (rc ev) rcFrom rcTo
-            getY mx _ = mx
-      maxX :: Int
-      maxX = foldl getX 1 args
+                  (fromR, fromC, toR, toC) = minMaxRCs (eRC ev) rcFrom rcTo
+            getY a _ = a
+      maxX = foldl' getX 1 args
          where
-            getX mx (XlLit (XlMatrix mtx)) = max mx (maxRowLength mtx)
+            getX a (XlLit (XlMatrix m)) = max a (maxRowLength m)
                where
                   maxRowLength :: [[XlValue]] -> Int
-                  maxRowLength mtx = foldl (\mx' row -> max mx' (length row)) 1 mtx
-            getX mx (XlRng rcFrom rcTo) = max mx (1 + toC - fromC)
+                  maxRowLength m = foldl (\a' row -> max a' (length row)) 1 m
+            getX a (XlRng rcFrom rcTo) = max a (1 + toC - fromC)
                where
-                  (fromR, fromC, toR, toC) = minMaxRCs (rc ev) rcFrom rcTo
-            getX mx _ = mx
+                  (fromR, fromC, toR, toC) = minMaxRCs (eRC ev) rcFrom rcTo
+            getX a _ = a
       doRow :: ([[XlValue]], XlValues) -> Int -> ([[XlValue]], XlValues)
-      doRow (mtx, vs) y = appendTo mtx $ foldl doCell ([], vs) [0..maxX-1]
+      doRow (m, vs) y = appendTo m $ foldl doCell ([], vs) [0..maxX-1]
          where
             doCell :: ([XlValue], XlValues) -> Int -> ([XlValue], XlValues)
-            doCell (row, vs) x = appendTo row
-                                   $ evalFormula ev vs (XlFun name (map ((toScalar ev) (rc ev) (x, y)) args))
-            appendTo :: [a] -> (a, b) -> ([a], b)
+            doCell (row, vs) x = appendTo row $ evalFormula ev vs f'
+               where
+                  f' = XlFun name (map ((eToScalar ev) (eRC ev) (x, y)) args)
             appendTo xs (v, vs) = (xs ++ [v], vs)
 
 iterateFormula ev vs f = evalFormula ev vs f
-
-\end{code}
-
-\subsubsection{Coercion to scalar}
-
-\begin{code} 
-
--- 2) Matrix evaluation
--- If an expression is being evaluated in a cell flagged as a being part of a 'Matrix'
--- (OpenDocument 8.1.3 table:number-matrix-columns-spanned):
-matrixToScalar :: XlRC -> (Int, Int) -> XlFormula -> XlFormula
-matrixToScalar myRC (x, y) formula =
-   case formula of
-      XlLit (XlMatrix mtx) ->
-         displayRule x y (foldl' max 0 (map length mtx)) (length mtx) (\x y -> XlLit $ mtx !! y !! x)
-      XlRng rcFrom rcTo ->
-         displayRule x y (1 + toC - fromC) (1 + toR - fromR)
-                     (\x y ->
-                        XlRef (XlRC (XlAbs (fromR + y)) (XlAbs (fromC + x))))
-            where 
-               (fromR, fromC, toR, toC) = minMaxRCs myRC rcFrom rcTo
-      f -> f
-   where
-      -- 2.1) The portion of a non-scalar result to be displayed need not be co-extensive with a
-      -- specified display area. The portion of the non-scalar result to be displayed is
-      -- determined by:
-      displayRule :: Int -> Int -> Int -> Int -> (Int -> Int -> XlFormula) -> XlFormula
-      displayRule x y sizeX sizeY getXY =
-         -- 2.1.1) If the position to be displayed exists in the result, display that position.
-         if sizeY > y && sizeX > x
-         then getXY x y
-         -- [Rules 2.1.2 and 2.1.3 apply to singletons]
-         else if sizeX == 1 && sizeY == 1
-         then getXY 0 0
-         -- 2.1.2) If the non-scalar result is 1 column wide, subsequent columns in the display
-         -- area display the value in the first column.
-         else if sizeX == 1 && x > 0
-         then getXY 0 y
-         -- 2.1.3) If the non-scalar result is 1 row high, subsequent rows in the display area use
-         -- the value of the first row.
-         else if sizeY == 1 && y > 0
-         then getXY x 0
-         -- 2.1.4) If none of the other rules apply @#N/A@
-         else XlLit $ XlError "#N/A"
 
 \end{code}
 
@@ -652,7 +628,7 @@ evalFormula :: XlEvaluator -> XlValues -> XlFormula -> (XlValue, XlValues)
 
 \begin{code}
 evalFormula ev vs (XlLit v) =
-   (v, Map.insert (rc ev) v vs)
+   (v, Map.insert (eRC ev) v vs)
 \end{code}
 
 \subsubsection{References}
@@ -660,20 +636,20 @@ evalFormula ev vs (XlLit v) =
 \begin{code}
 evalFormula ev vs (XlRef ref') =
    let
-      ref = toAbs (rc ev) ref'
-      ret v = (v, Map.insert (rc ev) v vs)
+      ref = toAbs (eRC ev) ref'
+      ret v = (v, Map.insert (eRC ev) v vs)
    in
-      if ref `Set.member` (visiting ev)
+      if ref `Set.member` (eVisiting ev)
       then ret (XlError "#LOOP!")
       else 
          case Map.lookup ref vs of
          Just v   -> ret v
          Nothing  ->
-            case Map.lookup ref (cells ev) of
+            case Map.lookup ref (eCells ev) of
             Nothing    -> ret (XlNumber 0)
             Just cell  -> 
                let
-                  (v', vs') = calcCell (Set.insert ref (visiting ev)) (cells ev) vs ref cell
+                  (v', vs') = calcCell (Set.insert ref (eVisiting ev)) (eCells ev) vs ref cell
                   vs'' = Map.insert ref v' vs'
                in
                   (v', vs'')
@@ -684,20 +660,20 @@ evalFormula ev vs (XlRef ref') =
 \begin{code}
 evalFormula ev vs (XlRng from to) = 
    let
-      (mtx, vs') = foldRange (rc ev) from to ([], vs) zeroRow cellOp rowOp
+      (m, vs') = foldRange (eRC ev) from to ([], vs) zeroRow cellOp rowOp
          where
             zeroRow :: ([[XlValue]], XlValues) -> ([XlValue], XlValues)
             zeroRow (_, vs) = ([], vs)
    
             cellOp :: ([XlValue], XlValues) -> XlRC -> ([XlValue], XlValues)
             cellOp (row, vs) rc =
-               addToRow $ (scalar ev) ev vs (XlRef rc)
+               addToRow $ (eScalar ev) ev vs (XlRef rc)
                   where addToRow (v, vs') = (row ++ [v], vs')
    
             rowOp :: ([[XlValue]], XlValues) -> Int -> ([XlValue], XlValues) -> ([[XlValue]], XlValues)
-            rowOp (curMtx, _) r (row, vs) = (curMtx ++ [row], vs)
+            rowOp (m, _) r (row, vs) = (m ++ [row], vs)
    in
-      (XlMatrix mtx, vs')
+      (XlMatrix m, vs')
 \end{code}
 
 \subsubsection{\texttt{IF}}
@@ -705,12 +681,12 @@ evalFormula ev vs (XlRng from to) =
 \begin{code}
 evalFormula ev vs (XlFun "IF" [i, t, e]) =
    let
-      (vi, vsi) = toNumber $ (scalar ev) ev vs i
+      (vi, vsi) = toNumber $ (eScalar ev) ev vs i
       (vr, vsr) = 
          case vi of
          (XlError _)   -> (vi, vsi)
-         (XlNumber 0)  -> (scalar ev) ev vsi e
-         (XlNumber _)  -> (scalar ev) ev vsi t
+         (XlNumber 0)  -> (eScalar ev) ev vsi e
+         (XlNumber _)  -> (eScalar ev) ev vsi t
          _             -> ((XlError "#VALUE!"), vsi)
    in
       (vr, vsr)
@@ -729,11 +705,11 @@ evalFormula ev vs (XlFun "INDIRECT" [addr]) =
          (a1, ':':b2)  -> (XlRng (toRC a1) (toRC b2))
          _             -> (XlRef (toRC s))
 
-      (va, vsa)  = toString $ (scalar ev) ev vs addr
+      (va, vsa)  = toString $ (eScalar ev) ev vs addr
       (vr, vsr)  = 
          case va of
          XlError e   -> (va, vsa)
-         XlString s  -> (scalar ev) ev vsa (convert s)
+         XlString s  -> (eScalar ev) ev vsa (convert s)
          _           -> ((XlError "#VALUE!"), vsa)
    in
       (vr, vsr)
@@ -755,11 +731,11 @@ evalFormula ev vs (XlFun "SUM" inputs) =
          where
             handle (acc, vsacc) input =
                let
-                  (vi, vsi) = (array ev) ev vsacc input
+                  (vi, vsi) = (eArray ev) ev vsacc input
                   vsum =
                      case vi of
                         XlError _     -> vi
-                        XlMatrix mtx  -> foldl' (foldl' (checkErr doSum)) acc mtx
+                        XlMatrix m  -> foldl' (foldl' (checkErr doSum)) acc m
                         XlBoolean b   -> checkErr doSum acc vi
                         XlNumber n    -> checkErr doSum acc vi
                         _             -> XlError "#VALUE!"
@@ -774,9 +750,9 @@ evalFormula ev vs (XlFun "SUM" inputs) =
 \begin{code}
 evalFormula ev vs (XlFun "MID" [vstr, vstart, vlen]) =
    let
-      (vstr',    vs')    = toString  $ (scalar ev) ev vs    vstr
-      (vstart',  vs'')   = toNumber  $ (scalar ev) ev vs'   vstart
-      (vlen',    vs''')  = toNumber  $ (scalar ev) ev vs''  vlen
+      (vstr',    vs')    = toString  $ (eScalar ev) ev vs    vstr
+      (vstart',  vs'')   = toNumber  $ (eScalar ev) ev vs'   vstart
+      (vlen',    vs''')  = toNumber  $ (eScalar ev) ev vs''  vlen
       
       doMid (XlString str) (XlNumber start) (XlNumber len) =
          XlString $ take (floor len) $ drop (floor start - 1) str
@@ -790,8 +766,8 @@ evalFormula ev vs (XlFun "MID" [vstr, vstart, vlen]) =
 \begin{code}
 evalFormula ev vs (XlFun "&" [a, b]) =
    let
-      (va, vs')   = toString $ (scalar ev) ev vs   a
-      (vb, vs'')  = toString $ (scalar ev) ev vs'  b
+      (va, vs')   = toString $ (eScalar ev) ev vs   a
+      (vb, vs'')  = toString $ (eScalar ev) ev vs'  b
       
       doConcat  (XlString sa)  (XlString sb)   = XlString (sa ++ sb)
       doConcat  _              _               = XlError "#VALUE!"
@@ -812,8 +788,8 @@ evalFormula ev vs (XlFun "*" [a, b])   = binOp  (*)   ev vs a b
 
 evalFormula ev vs (XlFun "/" [a, b]) =
    let
-      (va,  vs')   = toNumber $ (scalar ev) ev vs   a
-      (vb,  vs'')  = toNumber $ (scalar ev) ev vs'  b
+      (va,  vs')   = toNumber $ (eScalar ev) ev vs   a
+      (vb,  vs'')  = toNumber $ (eScalar ev) ev vs'  b
       
       doDiv  (XlNumber na)  (XlNumber 0)   = XlError "#DIV/0!"
       doDiv  (XlNumber na)  (XlNumber nb)  = XlNumber (na / nb)
@@ -830,8 +806,8 @@ In case of two errors, the first one is propagated.
 \begin{code}
 evalFormula ev vs (XlFun "=" [a, b]) =
    let
-      (va,  vs')  = (scalar ev) ev vs  a
-      (vb,  vs'') = (scalar ev) ev vs' b
+      (va,  vs')  = (eScalar ev) ev vs  a
+      (vb,  vs'') = (eScalar ev) ev vs' b
       
       doEq  (XlNumber na)   (XlNumber nb)   = XlBoolean (na == nb)
       doEq  (XlString sa)   (XlString sb)   = XlBoolean (sa == sb)
@@ -904,8 +880,8 @@ binOp ::  (Double -> Double -> Double)
           -> XlEvaluator -> XlValues -> XlFormula -> XlFormula -> (XlValue, XlValues)
 binOp op ev vs a b =
    let
-      (va, vs')   = toNumber $ (scalar ev) ev vs  a
-      (vb, vs'')  = toNumber $ (scalar ev) ev vs' b
+      (va, vs')   = toNumber $ (eScalar ev) ev vs  a
+      (vb, vs'')  = toNumber $ (eScalar ev) ev vs' b
       
       doOp (XlNumber na)  (XlNumber nb)   = XlNumber (op na nb)
       doOp _              _               = XlError "#VALUE!"
@@ -918,7 +894,7 @@ unOp ::  (Double -> Double)
          -> XlEvaluator -> XlValues -> XlFormula -> (XlValue, XlValues)
 unOp op ev vs v =
    let
-      (v', vs') = toNumber $ (scalar ev) ev vs v
+      (v', vs') = toNumber $ (eScalar ev) ev vs v
       v'' = case v' of
             e@(XlError _)  -> e
             (XlNumber n)   -> XlNumber $ op n
