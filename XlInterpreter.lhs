@@ -214,10 +214,10 @@ interface.\footnote{We were able to empirically verify this when we produced a
 spreadsheet with a formula that crashed LibreOffice. The application only
 crashed when the offending cell was scrolled into view.}
 
-Still, in the auxiliary accumulator function |acc| we avoid recalculating a
-cell if it was already calculated in this pass as a dependency of a previous
-cell. Also, we keep track of which cells are currently being visited for
-detecting circular references.
+Still, the interpreter avoids recalculating a cell if it was already
+calculated in the current pass as a dependency of a previous cell. Also, it
+keeps track of which cells are currently being visited, for detecting circular
+references.
 
 \begin{code}
 runEvent :: XlState -> XlEvent -> XlState
@@ -278,11 +278,11 @@ single array formula spanning a range of cells into a number of individual
 coordinates to indicate their relative position in the rectangular range to
 which the array formula was applied. 
 
-This makes two important assumptions. First, that we will able later to
-compute each position of an array formula individually. This assumption is not
+This makes two important assumptions. First, that it is possible to compute
+each position of an array formula individually. This assumption is not
 critical. At worst, it would wasteful in cases such as matrix multiplication,
 where each cell would cause the whole matrix to be calculated and then
-converted down to the scalar corresponding to the cell's position. 
+converted down to the scalar corresponding to the cell's position.
 
 The second assumption is that the computation of a given position $(x, y)$ in
 an array formula's range is independent of the total size of the range as
@@ -297,8 +297,8 @@ the same formula with the range @E2:F2@ selected causes the value of both
 cells to be @#VALUE!@. In LibreOffice (and in our interpreter), they evaluate
 to @3@ and @4@. By behaving differently according to the range size selected
 during initial entry, Excel adds a dependency to the calculation of cells that
-is invisible in its UI. We avoid this by using calculation strategies
-similar to those in LibreOffice and Google Sheets.
+is invisible in its UI. This interpreter avoids this problem by using
+calculation strategies similar to those in LibreOffice and Google Sheets.
 
 \section{Utility functions}
 
@@ -338,8 +338,8 @@ toAbs ref@(XlRC rb cb) cell@(XlRC r c) = XlRC (absAddr rb r) (absAddr cb c)
 \end{code}
 
 Function |toRC| converts Excel-style addresses in ``A1'' alphanumeric format
-to the internal row-column numeric format. (For simplicity, we only support
-columns A to Z.)
+to the internal row-column numeric format. (For simplicity, this interpreter
+only support columns A to Z.)
 
 \begin{code}
 toRC :: String -> XlRC
@@ -349,13 +349,13 @@ toRC (l:num) = XlRC (XlAbs ((read num) - 1)) (XlAbs ((ord l) - 65))
 \section{Calculating cells}
 \label{calccell}
 
-To calculate the value of a cell we evaluate the cell's formula, potentially
-recursing to evaluate other cells referenced by that formula. The |calcCell|
-takes as arguments a set of cell addresses currently being recursively visited
-(to detect cycles), the table of cell formulas, the current table of values,
-the base address of the cell and the cell to compute. The function produces
-the calculated value of the cell along with the map of all values, since other
-calls may have been computed along the way). 
+To determine the value of a cell, the interpreter evaluates the cell's
+formula, potentially recursing to evaluate other cells referenced by that
+formula. The |calcCell| takes as arguments a set of cell addresses currently
+being recursively visited (to detect cycles), the table of cell formulas, the
+current table of values, the base address of the cell and the cell to compute.
+The function produces the calculated value of the cell along with the map of
+all values, since other calls may have been computed along the way). 
 
 \begin{code}
 
@@ -379,12 +379,12 @@ to do in each evaluation mode. In our implementation, we modularized these
 decisions into a number of functions implementing different ways of evaluating
 a formula, in array and scalar contexts.
 
-Then, to represent an evaluation mode, we define a data type |XlEvaluator|
-which, besides carrying a few context values for convenience, includes a
-coercion function |toScalar| to obtain a scalar function according to the
-context of a cell (as we will see in more detail below), and two evaluation
-functions, one for each of the possible evaluation contexts: |array| and
-|scalar|.
+Then, to represent an evaluation mode, the interpreter features a data type
+|XlEvaluator| which, besides carrying a few context values for convenience,
+includes a coercion function |toScalar| to obtain a scalar function according
+to the context of a cell (as we will see in more detail below), and two
+evaluation functions, one for each of the possible evaluation contexts:
+|array| and |scalar|.
 
 \begin{code}
 
@@ -409,12 +409,12 @@ specification. With this, we achieved a good (but not full) degree of
 compatibility with LibreOffice in the subset of spreadsheet features
 implemented in this interpreter.
 
-For calculating the value of a regular cell, we define an evaluator that
-uses functions |intersectScalar| to convert non-scalar to scalars, 
-|evalScalarFormula| for evaluating scalar arguments, and |evalFormula|
-for evaluating non-scalar arguments. We will see the definition of these
-functions below. Once the evaluator is defined, we trigger the scalar
-evaluation function on the formula.
+For calculating the value of a regular cell, the interpreter uses an evaluator
+that uses functions |intersectScalar| to convert non-scalar to scalars,
+|evalScalarFormula| for evaluating scalar arguments, and |evalFormula| for
+evaluating non-scalar arguments. We will see the definition of these functions
+below. Once the evaluator is defined, we trigger the scalar evaluation
+function on the formula.
 
 \begin{code}
 
@@ -433,14 +433,16 @@ calcCell visiting cells vs myRC@(XlRC (XlAbs r) (XlAbs c)) (XlCell formula) =
 
 \end{code}
 
-For calculating cells marked as array formulas, we define a different
-evaluator. For coercing non-scalars into scalars, we will use a different
-function, |matrixToScalar|. For scalar evaluation of arguments, we will use
-the same |evalScalarFunction|, but for non-scalar evaluation, we will use
-|iterateFormula|. We also trigger the calculation by applying this mode's
-scalar evaluator, but we then filter the result value through a coercion
-function (|scalarize|), since we want to ensure that a scalar value is
-ultimately displayed in the cell.
+For calculating cells marked as array formulas, the interpreter uses a
+different evaluator. For coercing non-scalars into scalars, it uses a
+different function, |matrixToScalar|. For scalar evaluation of arguments, it
+uses the same function |evalScalarFunction| as above, but for non-scalar
+evaluation, it uses |iterateFormula|. 
+
+The implementation of |calcCell| for array formulas also triggers the
+calculation by applying this mode's scalar evaluator, but here the result
+value is further filtered through a coercion function (|scalarize|), to ensure
+that a scalar value is ultimately displayed in the cell.
 
 \begin{code}
 
@@ -466,10 +468,10 @@ scalarize ev (v, vs) = (v', vs)
 
 \subsection{Regular cell evaluation}
 
-When we evaluate a formula in a scalar context, we run the evaluator's scalar
-conversion function on the formula prior to evaluating it. If the formula is
-an array or a range, it will be converted to a scalar. If it is a scalar
-or a function, it will be evaluated as-is.
+When the interpreter evaluates a formula in a scalar context, it runs the
+evaluator's scalar conversion function on the formula prior to evaluating it
+proper. If the formula is an array or a range, it will be converted to a
+scalar. If it is a scalar or a function, it will be evaluated as-is.
 
 \begin{code}
 
@@ -484,14 +486,14 @@ The conversion function for regular cells, |intersectScalar|, is defined as
 follows.
 
 For array literals, element $(0, 0)$ is returned. Empty arrays have
-inconsistent behavior across spreadsheets. Here, we simply return the @#REF!@
-error, replicating the behavior of Google Sheets. When given an empty arrays,
-Excel rejects the formula, pops a message box alerting the user and does not
-accept the entry. Excel Online does not display a message, but marks the cell
-with a red dashed border. LibreOffice exhibits a very inconsistent behavior:
-an empty cell by itself displays as an empty cell; @=10/{}@ evaluates to
-@#VALUE!@ but both @=ABS({})@ and @=ABS(10/{})@ evaluate to @0@, but
-@=ABS(A1)@ where A1 is @{}@) evaluates to @#VALUE!@.
+inconsistent behavior across spreadsheets. When given an empty array, Excel
+rejects the formula, pops a message box alerting the user and does not accept
+the entry. Excel Online does not display a message, but marks the cell with a
+red dashed border. LibreOffice exhibits a very inconsistent behavior: @={}@
+displays as an empty cell; @=10/{}@ evaluates to @#VALUE!@ but both @=ABS({})@
+and @=ABS(10/{})@ evaluate to @0@; however, @=ABS(A1)@ where A1 is @{}@)
+evaluates to @#VALUE!@. In our interpreter, we simply return the @#REF!@
+error for all uses of @{}@, replicating the behavior of Google Sheets. 
 
 For ranges, the resulting value depends on the shape of the range and position
 where the formula was entered. If the range is a vertical ($n \times 1$) or
@@ -530,19 +532,19 @@ the same evaluation function as in regular cells, |evalScalarFormula|.
 However, in array formulas this function uses a different conversion function:
 |eToScalar| is defined as |matrixToScalar|.
 
-Function |matrixToScalar| extracts a scalar value from a non-scalar based
-on the position $(x, y)$ that the cell being evaluated has as part of the
-range for which the array formula was defined. This way, as we calculate
-cell values for each position of the range, each cell will extract a different
-value from non-scalars produced during the evaluation of the formula. For
-example, if we enter @=A1:B2@ as an array formula in range @D10:E11@,
-cell @D11@ is position $(1, 0)$ and will obtain the value of cell @B1@.
+Function |matrixToScalar| extracts a scalar value from a non-scalar based on
+the position $(x, y)$ relative to the range for which the array formula was
+defined. This way, as the interpreter calculates cell values for each position
+of the range, each cell will extract a different value from non-scalars
+produced during the evaluation of the formula. For example, if we enter
+@=A1:B2@ as an array formula in range @D10:E11@, cell @D11@ has position $(1,
+0)$ and will obtain the value of cell @B1@.
 
 The area designated by the user for an array formula does not necessarily have
 the same dimensions as the non-scalar being displayed in it. The OpenDocument
-specification lists a series of rules for filling the exceeding cells,
-which we encode in the |displayRule| function. Excel and LibreOffice
-implement these rules; Google Sheets does not.
+specification lists a series of rules for filling the exceeding cells, which
+the |displayRule| function below implements. Excel and LibreOffice implement
+these rules; Google Sheets does not.
 
 \begin{code} 
 
@@ -574,7 +576,7 @@ produces a matrix with results, evaluating the formula in scalar context once
 for each cell, replacing the non-scalar argument with the scalar element
 corresponding to the cell position. It does this by first checking each
 argument and determining the maximum dimensions used by an argument (|maxX|
-and |maxY|). Then, we iterate through rows and columns, evaluating the
+and |maxY|). Then, it iterates through rows and columns, evaluating the
 function with a modified version of the list of arguments, in which 
 each non-scalar argument has been converted to scalar.
 
