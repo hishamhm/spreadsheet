@@ -28,8 +28,8 @@
 %format (XlRel v) = "\langle " v "\rangle_{R}"
 
 %format `Set.member` = "\in"
-%format rb = "r_b"
-%format cb = "c_b"
+%format rp = "r_p"
+%format cp = "c_p"
 %format va = "v_a"
 %format vb = "v_b"
 %format vi = "v_i"
@@ -44,6 +44,7 @@
 %format vsacc = "vs_{acc}"
 %format vstr = "v_{str}"
 %format vstart = "v_{start}"
+%format vstart = "v_{sum}"
 %format vlen = "v_{len}"
 %format vstr'
 %format vstart'

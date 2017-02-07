@@ -16,7 +16,7 @@
 \begin{code}
 
 import XlInterpreter
-import Data.Char (chr)
+import Data.Char (chr, ord)
 import Data.Map.Strict as Map (foldlWithKey, empty, lookup, toList, (!))
 import Text.PrettyPrint.Boxes as Box (render, hcat, vcat, text)
 import Text.PrettyPrint.Boxes as Alignment (left, right)
@@ -88,6 +88,9 @@ ref a1 = XlRef (toRC a1)
 
 range :: String -> String -> XlFormula
 range a1 b2 = XlRng (toRC a1) (toRC b2)
+
+toRC :: String -> XlRC
+toRC (l:num) = XlRC (XlAbs ((read num) - 1)) (XlAbs ((ord l) - 65)) 
 \end{code}
 
 Then, we construct a test driver function that runs test cases and compares the results to expected values.
@@ -150,9 +153,9 @@ main =
             
             ( XlSetFormula (toRC "A10") (num 10),                                    XlNumber 10 ),
             ( XlSetFormula (toRC "A11") (str "10"),                                  XlString "10" ),
-            ( XlSetFormula (toRC "A12") (XlFun "=" [ref "A10", ref "A11"]),          XlBoolean False ),
-            ( XlSetFormula (toRC "A13") (XlFun "=" [ref "A10", num 10]),             XlBoolean True ),
-            ( XlSetFormula (toRC "A14") (XlFun "=" [ref "A13", num 1]),              XlBoolean True ),
+            ( XlSetFormula (toRC "A12") (XlFun "=" [ref "A10", ref "A11"]),          XlBool False ),
+            ( XlSetFormula (toRC "A13") (XlFun "=" [ref "A10", num 10]),             XlBool True ),
+            ( XlSetFormula (toRC "A14") (XlFun "=" [ref "A13", num 1]),              XlBool True ),
    
             ( XlSetFormula (toRC "A15") (XlFun "/" [num 1, num 0]),                  XlError "#DIV/0!" ),
             ( XlSetFormula (toRC "A16") (XlFun "=" [ref "K2", ref "A15"]),           XlError "#VALUE!" ),
