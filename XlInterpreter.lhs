@@ -707,7 +707,7 @@ evalFormula ev vs (XlRng from to) =
       (XlMatrix m, vs')
 \end{code}
 
-\subsubsection{\texttt{IF}}
+\subsubsection{\texttt{IF}, \texttt{AND}, and \texttt{OR}}
 
 The @IF@ function takes three arguments. It tests the first argument, and if evaluates
 to |XlBoolean True| it evaluates the second argument and returns it; otherwise, it
@@ -729,12 +729,24 @@ evalFormula ev vs (XlFun "IF" [i, t, e]) =
 
 \end{code}
 
-The @OR@ function in spreadsheets, on the other hand, is evaluated strictly,
-not performing the usual short-circuit expected of the ``or'' operator. It
-evaluates both arguments, and returns and error if either argument fails, or
-|XlBoolean True| if one of them is true.
+The @AND@ and @OR@ functions in spreadsheets, however, are evaluated strictly,
+not performing the usual short-circuit expected of them in programming
+languages. They always evaluate both arguments, and return and error if either
+argument fails.
 
 \begin{code}
+evalFormula ev vs (XlFun "AND" [a, b]) =
+   let
+      (va, vs')  = toBoolean $ (eScalar ev) ev vs a
+      (vb, vs'') = toBoolean $ (eScalar ev) ev vs' b
+      vr = case (va, vb) of
+           (XlError _, _)                   -> va
+           (_, XlError _)                   -> vb
+           (XlBoolean True, XlBoolean True) -> va
+           _                                -> XlBoolean False
+   in
+      (vr, vs'')
+
 evalFormula ev vs (XlFun "OR" [a, b]) =
    let
       (va, vs')  = toBoolean $ (eScalar ev) ev vs a
@@ -747,12 +759,12 @@ evalFormula ev vs (XlFun "OR" [a, b]) =
            _                    -> XlBoolean False
    in
       (vr, vs'')
-
 \end{code}
 
 \subsubsection{\texttt{INDIRECT}}
 
-When parsing the string, we're missing error checking in |toRC|.
+For simplicity, we do not perform error checking when parsing the string with
+|toRC|.
 
 \begin{code}
 evalFormula ev vs (XlFun "INDIRECT" [addr]) =
@@ -927,8 +939,8 @@ bool2num :: Bool -> Double
 bool2num b = if b == True then 1 else 0
 \end{code}
 
-Functions |toNumber| and |toString| attempt to convert a value to the
-specified type, producing a |XlError| value if its is not convertible.
+Functions |toNumber|, |toString| and |toBoolean| attempt to convert a value to
+the specified type, producing a |XlError| value if its is not convertible.
 
 \begin{code}
 toNumber :: (XlValue, XlValues) -> (XlValue, XlValues)
