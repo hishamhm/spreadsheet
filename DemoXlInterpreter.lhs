@@ -13,6 +13,47 @@
 
 \section{Introduction}
 
+We present here a demonstration of the spreadsheet interpreter in use. This
+appendix is a Literate Haskell program including the complete source code of
+the demonstration.
+
+This demonstration presents a series of tests, many of which correspond to
+sections of the OpenDocument specification for the @.ods@ format
+[***reference***] and the ISO Open Office XML specification for the @.xlsx@
+format [***reference***], as well as our own additional tests that cover some
+unspecified behavior.
+
+Finally, we run the tests. As an illustration of the execution, the first
+example below produces the following output:
+
+\begin{footnotesize}\begin{verbatim}
+Values:
+  |A        |B        |C        |D        |E        |F        |G        |H        |I        |J        
+ 1|       15|       15|"B"      |       75|       30|      105|     1015|       10|      -20|       30
+ 2|       30|       15|        1|         |         |         |         |         |       20|         
+ 3|         |         |         |         |         |         |         |         |         |         
+ 4|         |         |         |         |         |         |         |         |         |         
+ 5|         |         |"#VALUE!"|      115|         |       15|         |         |         |         
+ 6|         |         |         |      130|         |       16|         |         |         |         
+ 7|         |         |         |         |         |         |         |         |         |         
+ 8|         |         |         |         |         |         |"#VALUE!"|         |         |         
+ 9|         |         |         |         |         |         |         |         |         |         
+10|       10|         |         |         |         |         |         |         |         |         
+11|"10"     |         |         |         |         |         |         |         |         |         
+12|False    |         |         |         |         |         |         |         |         |         
+13|True     |         |         |         |         |         |         |         |         |         
+14|True     |         |         |         |         |         |         |         |         |         
+15|"#DIV/0!"|         |         |         |         |         |         |         |         |         
+16|"#VALUE!"|         |         |         |         |         |         |         |         |         
+17|"#DIV/0!"|         |         |         |         |         |         |         |         |         
+\end{verbatim}\end{footnotesize}
+
+This program imports the interpreter defined in Chapter [*** number ***] as a
+module, as well as some standard modules from the Haskell Platform. We also
+use one additional module for tabular pretty-printing of the output:
+|Text.PrettyPrint.Boxes|, available from Hackage, the Haskell community's
+package repository [*** reference/link ***].
+
 \begin{code}
 
 import XlInterpreter
@@ -23,7 +64,7 @@ import Text.PrettyPrint.Boxes as Alignment (left, right)
 
 \end{code}
 
-\section{Demonstration}
+\section{Formatting}
 
 In order to produce a more readable output, we define the instance |Show| for
 our |XlState| type, using the |Text.PrettyPrint| package to produce tabular
@@ -33,13 +74,7 @@ outputs.
 
 instance Show XlState where
    show (XlState cells values) = 
-      "\nCells:\n" ++
-      listCells ++
-      "\nValues:\n" ++
-      tableValues ++
-      "\n" ++
-      show values ++
-      "\n"
+      "\nCells:\n" ++ listCells ++ "\nValues:\n" ++ tableValues ++ "\n" ++ show values ++ "\n"
          where
             maxRow       =  Map.foldlWithKey (\mx (XlRC (XlAbs r) _) _ -> max r mx) 0 values
             maxCol       =  Map.foldlWithKey (\mx (XlRC _ (XlAbs c)) _ -> max c mx) 0 values
@@ -54,46 +89,20 @@ instance Show XlState where
                             $ map Box.text
                             $ " " : map show [1..(maxRow + 1)]
             doCol c      =  Box.vcat Alignment.left
-                            $ Box.text ['|', chr (c + 65)] : map (\s -> Box.text ('|' : doRow s)) [0..maxRow]
-               where
-                  doRow r =
-                     let
-                        rc = (XlRC (XlAbs r) (XlAbs c))
-                        val = Map.lookup rc values
-                        lpad m xs = reverse $ take m $ reverse $ (take m $ repeat ' ') ++ (take m xs)
-                     in
-                        case val of
-                           Just (XlNumber n)  -> lpad 11 (num2str n)
-                           Just v             -> show v
-                           Nothing            -> ""
+                            $ Box.text ['|', chr (c + 65)] : 
+                              map (\s -> Box.text ('|' : doRow s c)) [0..maxRow]
+            lpad m xs    =  reverse $ take m $ reverse $ (take m $ repeat ' ') ++ (take m xs)
+            doRow r c    =  case Map.lookup ((XlRC (XlAbs r) (XlAbs c))) values of
+                            Just (XlNumber n)  -> lpad 9 (num2str n)
+                            Just v             -> show v
+                            Nothing            -> ""
 
 \end{code}
 
-Here, we run a suite of tests, checking for results described in the specification documents.
+\section{A test driver}
 
-We employ a few shortcuts to write down formulas:
-
-\begin{code}
-str :: String -> XlFormula
-str s = XlLit (XlString s)
-
-num :: Double -> XlFormula
-num n = XlLit (XlNumber n)
-
-nummtx :: [[Double]] -> XlFormula
-nummtx mx = XlLit (XlMatrix (map (map XlNumber) mx))
-
-ref :: String -> XlFormula
-ref a1 = XlRef (toRC a1)
-
-range :: String -> String -> XlFormula
-range a1 b2 = XlRng (toRC a1) (toRC b2)
-
-toRC :: String -> XlRC
-toRC (l:num) = XlRC (XlAbs ((read num) - 1)) (XlAbs ((ord l) - 65)) 
-\end{code}
-
-Then, we construct a test driver function that runs test cases and compares the results to expected values.
+We construct below a test driver function that runs test cases and compares
+their results to expected values.
 
 \begin{code}
 runTest :: String -> [(XlEvent, XlValue)] -> IO ()
@@ -116,265 +125,275 @@ runTest name operations =
                      then Nothing else
                      Just (rcFrom, value)
    in do
+      putStrLn ""
       print name
       print env
       if null failures
       then putStrLn "OK! :-D"
       else
          do
-            putStrLn "****************** Failed: ******************"
+            putStrLn "Failed: "
             print failures
 \end{code}
 
-Finally, we run the tests.
+We employ a few shortcuts to write down formulas more tersely on paper:
+
+\begin{code}
+str s = XlString s
+num n = XlNumber n
+err e = XlError e
+boo b = XlBool b
+lnum n = XlLit (XlNumber n)
+lstr s = XlLit (XlString s)
+lmtx mx = XlLit (XlMatrix (map (map XlNumber) mx))
+lmtxs mx = XlLit (XlMatrix (map (map XlString) mx))
+fun f args = XlFun f args
+ref a1 = XlRef (toRC a1)
+range a1 b2 = XlRng (toRC a1) (toRC b2)
+toRC (l:num) = XlRC (XlAbs ((read num) - 1)) (XlAbs ((ord l) - 65))
+addF rc f v = (XlSetFormula (toRC rc) f, v)
+addAF rcFrom rcTo f v = (XlSetArrayFormula (toRC rcFrom) (toRC rcTo) f, v)
+sumSqrt l = num $ foldr (+) 0 (map sqrt l)
+\end{code}
+
+Each invocation of |runTest| below is a new spreadsheet, where |addF| and
+|addAF| are events adding formulas and array formulas to cells. The last
+argument is the expected value. All tests here produce the indicated values.
+
+This batch of tests aims to document the specific behavior of the interpreter
+written in Chapter [*** number ***] and also serves as a list of corner cases
+which expose incompatibilities between real-world spreadsheet applications.
 
 \begin{code}
 
 main :: IO ()
 main = 
-      do
-         runTest "Example" [
-            ( XlSetFormula (toRC "A1") (num 15),                                      XlNumber 15 ),
-            ( XlSetFormula (toRC "B1") (num 0),                                       XlNumber 15 ),
-            ( XlSetFormula (toRC "A2") (XlFun "+" [ref "A1", ref "B1"]),              XlNumber 30 ),
-            ( XlSetFormula (toRC "B1") (ref "A1"),                                    XlNumber 15 ),
-            ( XlSetFormula (toRC "C1") (str "B"),                                     XlString "B" ),
-            ( XlSetFormula (toRC "C2") (num 1),                                       XlNumber 1 ),
-            ( XlSetFormula (toRC "B2") (XlFun "INDIRECT" [XlFun "&" [ref "C1", ref "C2"]]), XlNumber 15 ),
-            ( XlSetFormula (toRC "D1") (XlFun "SUM" [range "A1" "B2"]),              XlNumber 75 ),
-            ( XlSetFormula (toRC "E1") (XlFun "SUM" [range "B1" "B2"]),              XlNumber 30 ),
-            ( XlSetFormula (toRC "F1") (XlFun "SUM" [range "D1" "E1"]),              XlNumber 105 ),
-            
-            ( XlSetFormula (toRC "H1") (num 10),                                     XlNumber 10 ),
-            ( XlSetFormula (toRC "I1") (num (-20)),                                  XlNumber (-20) ),
-            ( XlSetFormula (toRC "J1") (num 30),                                     XlNumber 30 ),
-            ( XlSetFormula (toRC "I2") (XlFun "ABS" [range "H1" "J1"]),              XlNumber 20 ),
-            ( XlSetFormula (toRC "K2") (XlFun "ABS" [range "H1" "J1"]),              XlError "#VALUE!" ),
-            
-            ( XlSetFormula (toRC "A10") (num 10),                                    XlNumber 10 ),
-            ( XlSetFormula (toRC "A11") (str "10"),                                  XlString "10" ),
-            ( XlSetFormula (toRC "A12") (XlFun "=" [ref "A10", ref "A11"]),          XlBool False ),
-            ( XlSetFormula (toRC "A13") (XlFun "=" [ref "A10", num 10]),             XlBool True ),
-            ( XlSetFormula (toRC "A14") (XlFun "=" [ref "A13", num 1]),              XlBool True ),
+   do
+   runTest "Example" [
+      addF "A1" (lnum 15) (num 15),
+      addF "B1" (lnum 0) (num 15),
+      addF "A2" (fun "+" [ref "A1", ref "B1"]) (num 30),
+      addF "B1" (ref "A1") (num 15),
+      addF "C1" (lstr "B") (str "B"),
+      addF "C2" (lnum 1) (num 1),
+      addF "B2" (fun "INDIRECT" [fun "&" [ref "C1", ref "C2"]]) (num 15),
+      addF "D1" (fun "SUM" [range "A1" "B2"]) (num 75),
+      addF "E1" (fun "SUM" [range "B1" "B2"]) (num 30),
+      addF "F1" (fun "SUM" [range "D1" "E1"]) (num 105),
+      
+      addF "H1" (lnum 10) (num 10),
+      addF "I1" (lnum (-20)) (num (-20)),
+      addF "J1" (lnum 30) (num 30),
+      addF "I2" (fun "ABS" [range "H1" "J1"]) (num 20),
+      addF "G8" (fun "ABS" [range "H1" "J1"]) (err "#VALUE!"),
+      
+      addF "A10" (lnum 10) (num 10),
+      addF "A11" (lstr "10") (str "10"),
+      addF "A12" (fun "=" [ref "A10", ref "A11"]) (boo False),
+      addF "A13" (fun "=" [ref "A10", lnum 10]) (boo True),
+      addF "A14" (fun "=" [ref "A13", lnum 1]) (boo True),
+      
+      addF "A15" (fun "/" [lnum 1, lnum 0]) (err "#DIV/0!"),
+      addF "A16" (fun "=" [ref "G8", ref "A15"]) (err "#VALUE!"),
+      addF "A17" (fun "=" [ref "A15", ref "G8"]) (err "#DIV/0!"),
+      
+      addF "G1" (fun "+" [lnum 1000, range "A1" "A2"]) (num 1015),
+      
+      addF "C5" (range "A1" "A2") (err "#VALUE!"),
+      addAF "F5" "F6" (lmtx [[15], [16]]) (num 15),
+      addAF "D5" "D6" (fun "+" [range "A1" "A2", lnum 100]) (num 115)]
+
+   runTest "OASIS 3.3 1.1) Note 1" [
+      addF "A1" (fun "ABS" [lmtx [[-3, -4]]]) (num 3),
+      addF "A2" (fun "ABS" [lmtx [[-3], [-4]]]) (num 3),
+      addF "A3" (fun "ABS" [lmtx [[-3, -4], [-6, -8]]]) (num 3),
+      addF "A4" (lmtx [[1, 2, 3], [4, 5, 6]]) (num 1)]
+
+   runTest "OASIS 3.3 1.2.1) Notes 2 and 3" [
+      addF "A1" (lnum (-10)) (num (-10)),
+      addF "B1" (lnum (-20)) (num (-20)),
+      addF "C1" (lnum (-30)) (num (-30)),
+      addF "B2" (fun "ABS" [range "A1" "C1"]) (num 20),
+      addF "D4" (fun "ABS" [range "A1" "C1"]) (err "#VALUE!")]
    
-            ( XlSetFormula (toRC "A15") (XlFun "/" [num 1, num 0]),                  XlError "#DIV/0!" ),
-            ( XlSetFormula (toRC "A16") (XlFun "=" [ref "K2", ref "A15"]),           XlError "#VALUE!" ),
-            ( XlSetFormula (toRC "A17") (XlFun "=" [ref "A15", ref "K2"]),           XlError "#DIV/0!" ),
+   runTest "OASIS 3.3 2.1.4) Note 5.1" [
+      addAF "A1" "B3" (lmtx [[1,2],[3,4],[5,6]]) (num 1),
+      addF "C3" (ref "B2") (num 4)]
 
-            ( XlSetFormula (toRC "G1") (XlFun "+" [num 1000, range "A1" "A2"]),      XlNumber 1015 ),
+   runTest "OASIS 3.3 2.1.4) Note 5.2" [
+      addAF "A1" "B3" (lmtx [[1],[3],[5]]) (num 1),
+      addF "C3" (ref "B2") (num 3)]
 
-            ( XlSetFormula (toRC "C5") (range "A1" "A2"),                            XlError "#VALUE!" ),
-            ( XlSetArrayFormula (toRC "F5") (toRC "F6") (nummtx [[15], [16]]), XlNumber 15 ),
-            ( XlSetArrayFormula (toRC "D5") (toRC "D6") (XlFun "+" [range "A1" "A2", num 100]), XlNumber 115 )
-            ]
-         runTest "3.3 1 1.1) Note 1" [
-            ( XlSetFormula (toRC "A1") (XlFun "ABS" [nummtx [[-3, -4]]]), XlNumber 3 ),
-            ( XlSetFormula (toRC "A2") (XlFun "ABS" [nummtx [[-3], [-4]]]), XlNumber 3 ),
-            ( XlSetFormula (toRC "A3") (XlFun "ABS" [nummtx [[-3, -4], [-6, -8]]]), XlNumber 3 ),
-            ( XlSetFormula (toRC "A4") (nummtx [[1, 2, 3], [4, 5, 6]]), XlNumber 1 )
-            ]
-         runTest "3.3 1 1.2 1.2.1) Notes 2 and 3" [
-            ( XlSetFormula (toRC "A1") (num (-10)), XlNumber (-10) ),
-            ( XlSetFormula (toRC "B1") (num (-20)), XlNumber (-20) ),
-            ( XlSetFormula (toRC "C1") (num (-30)), XlNumber (-30) ),
-            ( XlSetFormula (toRC "B2") (XlFun "ABS" [range "A1" "C1"]), XlNumber 20 ),
-            ( XlSetFormula (toRC "D4") (XlFun "ABS" [range "A1" "C1"]), XlError "#VALUE!" )
-            ]
-         runTest "3.3 2 2.1 2.1.4) Note 5.1" [
-            ( XlSetArrayFormula (toRC "A1") (toRC "B3") (nummtx [[1,2],[3,4],[5,6]]), XlNumber 1 ),
-            ( XlSetFormula (toRC "C3") (ref "B2"), XlNumber 4 )
-            ]
-         runTest "3.3 2 2.1 2.1.4) Note 5.2" [
-            ( XlSetArrayFormula (toRC "A1") (toRC "B3") (nummtx [[1],[3],[5]]), XlNumber 1 ),
-            ( XlSetFormula (toRC "C3") (ref "B2"), XlNumber 3 )
-            ]
-         runTest "3.3 2 2.1 2.1.4) Note 5.3" [
-            ( XlSetArrayFormula (toRC "A1") (toRC "B3") (nummtx [[2,4]]), XlNumber 2 ),
-            ( XlSetFormula (toRC "C3") (XlRef (toRC "B2")), XlNumber 4 )
-            ]
-         runTest "3.3 2 2.1 2.1.4) Note 5.3" [
-            ( XlSetArrayFormula (toRC "A1") (toRC "C4") (nummtx [[1,2],[3,4],[5,6]]), XlNumber 1 ),
-            ( XlSetFormula (toRC "D1") (XlRef (toRC "C1")), XlError "#N/A" ),
-            ( XlSetFormula (toRC "D2") (XlRef (toRC "A4")), XlError "#N/A" )
-            ]
-         runTest "3.3 2 2.1 2.1.4) Note 6" [
-            ( XlSetArrayFormula (toRC "A1") (toRC "B2") (nummtx [[1,2],[3,4],[5,6]]), XlNumber 1 ),
-            ( XlSetFormula (toRC "D1") (XlRef (toRC "B3")), XlEmpty )
-            ]
-         runTest "3.3 2 2.2 2.2.1) Note 7 (oasis_note7.ods)" [
-            ( XlSetFormula      (toRC "A1")             (num 10), XlNumber 10 ),
-            ( XlSetFormula      (toRC "A2")             (num 20), XlNumber 20 ),
+   runTest "OASIS 3.3 2.1.4) Note 5.3" [
+      addAF "A1" "B3" (lmtx [[2,4]]) (num 2),
+      addF "C3" (ref "B2") (num 4)]
 
-            ( XlSetFormula      (toRC "B3")             (XlFun "INDIRECT" [XlLit (XlMatrix [[XlString "A1", XlString "A2"]])]), XlNumber 10 ),
-            ( XlSetArrayFormula (toRC "B4") (toRC "C4") (XlFun "INDIRECT" [XlLit (XlMatrix [[XlString "A1", XlString "A2"]])]), XlNumber 10 ),
-            ( XlSetFormula      (toRC "B5")             (XlFun "SUM" [XlFun "INDIRECT" [XlLit (XlMatrix [[XlString "A1", XlString "A2"]])]]), XlNumber 10 ),
-            ( XlSetArrayFormula (toRC "B6") (toRC "B6") (XlFun "SUM" [XlFun "INDIRECT" [XlLit (XlMatrix [[XlString "A1", XlString "A2"]])]]), XlNumber 30 ),
-            ( XlSetFormula      (toRC "B7")             (XlFun "SUM" [XlFun "SQRT" [range "A1" "A2"]]), XlError "#VALUE!" ),
-            ( XlSetArrayFormula (toRC "B8") (toRC "B8") (XlFun "SUM" [XlFun "SQRT" [range "A1" "A2"]]), XlNumber (sqrt 10 + sqrt 20) ),
-            ( XlSetFormula      (toRC "C7")             (XlFun "SQRT" [range "A1" "A2"]), XlError "#VALUE!" ),
-            ( XlSetArrayFormula (toRC "C8") (toRC "C9") (XlFun "SQRT" [range "A1" "A2"]), XlNumber (sqrt 10) ),
+   runTest "OASIS 3.3 2.1.4) Note 5.3" [
+      addAF "A1" "C4" (lmtx [[1,2],[3,4],[5,6]]) (num 1),
+      addF "D1" (ref "C1") (err "#N/A"),
+      addF "D2" (ref "A4") (err "#N/A")]
 
-            ( XlSetFormula      (toRC "D3")             (nummtx [[10, 20]]), XlNumber 10 ),
-            ( XlSetArrayFormula (toRC "D4") (toRC "E4") (nummtx [[10, 20]]), XlNumber 10 ),
-            ( XlSetFormula      (toRC "D5")             (XlFun "SUM" [nummtx [[10,20]]]), XlNumber 30 ),
-            ( XlSetArrayFormula (toRC "D6") (toRC "D6") (XlFun "SUM" [nummtx [[10,20]]]), XlNumber 30 ),
-            ( XlSetFormula      (toRC "D7")             (XlFun "SUM" [XlFun "SQRT" [nummtx [[10,20]]]]), XlNumber (sqrt 10) ),
-            ( XlSetArrayFormula (toRC "D8") (toRC "D8") (XlFun "SUM" [XlFun "SQRT" [nummtx [[10,20]]]]), XlNumber (sqrt 10 + sqrt 20) ),
-            ( XlSetFormula      (toRC "E7")             (XlFun "SQRT" [nummtx [[10,20]]]), XlNumber (sqrt 10) ),
-            ( XlSetArrayFormula (toRC "E8") (toRC "E9") (XlFun "SQRT" [nummtx [[10],[20]]]), XlNumber (sqrt 10) )
-            ]
-         runTest "3.3 2 2.2 2.2.1) Note 8.1" [
-            ( XlSetArrayFormula (toRC "A1") (toRC "C1") (XlFun "+" [nummtx [[1,2]], nummtx [[3,4,5]]]), XlNumber 4 ),
-            ( XlSetFormula (toRC "A2") (ref "A1"), XlNumber 4 ),
-            ( XlSetFormula (toRC "B2") (ref "B1"), XlNumber 6 ),
-            ( XlSetFormula (toRC "C2") (ref "C1"), XlError "#N/A" )
-            ]
-         runTest "3.3 2 2.2 2.2.1) Note 8.2" [
-            ( XlSetArrayFormula (toRC "A1") (toRC "B1") (XlFun "+" [nummtx [[1]], nummtx [[1,2]]]), XlNumber 2 ),
-            ( XlSetFormula (toRC "A2") (ref "A1"), XlNumber 2 ),
-            ( XlSetFormula (toRC "B2") (ref "B1"), XlNumber 3 )
-            ]
-         runTest "3.3 2 2.2 2.2.3 2.2.3.1) Note 9.1" [
-            ( XlSetArrayFormula (toRC "A1") (toRC "C2") (XlFun "+" [num 1, nummtx [[1,2,3],[4,5,6]]]), XlNumber 2 ),
-            ( XlSetFormula (toRC "D1") (ref "A1"), XlNumber 2 ),
-            ( XlSetFormula (toRC "E1") (ref "B1"), XlNumber 3 ),
-            ( XlSetFormula (toRC "F1") (ref "C1"), XlNumber 4 ),
-            ( XlSetFormula (toRC "D2") (ref "A2"), XlNumber 5 ),
-            ( XlSetFormula (toRC "E2") (ref "B2"), XlNumber 6 ),
-            ( XlSetFormula (toRC "F2") (ref "C2"), XlNumber 7 )
-            ]
-         runTest "3.3 2 2.2 2.2.3 2.2.3.1) Note 9.2" [
-            ( XlSetArrayFormula (toRC "A1") (toRC "C2") (XlFun "+" [nummtx [[1]], nummtx [[1,2,3],[4,5,6]]]), XlNumber 2 ),
-            ( XlSetFormula (toRC "D1") (ref "A1"), XlNumber 2 ),
-            ( XlSetFormula (toRC "E1") (ref "B1"), XlNumber 3 ),
-            ( XlSetFormula (toRC "F1") (ref "C1"), XlNumber 4 ),
-            ( XlSetFormula (toRC "D2") (ref "A2"), XlNumber 5 ),
-            ( XlSetFormula (toRC "E2") (ref "B2"), XlNumber 6 ),
-            ( XlSetFormula (toRC "F2") (ref "C2"), XlNumber 7 )
-            ]
-         runTest "3.3 2 2.2 2.2.3 2.2.3.1) Note 10" [
-            ( XlSetArrayFormula (toRC "A1") (toRC "B2") (XlFun "+" [nummtx [[1],[2]], nummtx [[10,20],[30,40]]]), XlNumber 11 ),
-            ( XlSetFormula (toRC "D1") (ref "A1"), XlNumber 11 ),
-            ( XlSetFormula (toRC "E1") (ref "B1"), XlNumber 21 ),
-            ( XlSetFormula (toRC "D2") (ref "A2"), XlNumber 32 ),
-            ( XlSetFormula (toRC "E2") (ref "B2"), XlNumber 42 )
-            ]
-         runTest "3.3 2 2.2 2.2.3 2.2.3.1) Note 11" [
-            ( XlSetArrayFormula (toRC "A1") (toRC "B2") (XlFun "+" [nummtx [[1,2]], nummtx [[10,20],[30,40]]]), XlNumber 11 ),
-            ( XlSetFormula (toRC "D1") (ref "A1"), XlNumber 11 ),
-            ( XlSetFormula (toRC "E1") (ref "B1"), XlNumber 22 ),
-            ( XlSetFormula (toRC "D2") (ref "A2"), XlNumber 31 ),
-            ( XlSetFormula (toRC "E2") (ref "B2"), XlNumber 42 )
-            ]
-         runTest "3.3 2 2.2 2.2.3 2.2.3.1) Note 12" [
-            ( XlSetArrayFormula (toRC "A1") (toRC "B2") (XlFun "+" [nummtx [[1,2]], nummtx [[10],[20]]]), XlNumber 11 ),
-            ( XlSetFormula (toRC "D1") (ref "A1"), XlNumber 11 ),
-            ( XlSetFormula (toRC "E1") (ref "B1"), XlNumber 12 ),
-            ( XlSetFormula (toRC "D2") (ref "A2"), XlNumber 21 ),
-            ( XlSetFormula (toRC "E2") (ref "B2"), XlNumber 22 )
-            ]
-         runTest "3.3 2 2.2 2.2.3 2.2.3.1) Note 13" [
-            ( XlSetArrayFormula (toRC "A1") (toRC "C1") (XlFun "MID" [str "abcd", nummtx [[1,2]], nummtx [[1,2,3]]]), XlString "a" ),
-            ( XlSetFormula (toRC "A2") (ref "A1"), XlString "a" ),
-            ( XlSetFormula (toRC "B2") (ref "B1"), XlString "bc" ),
-            ( XlSetFormula (toRC "C2") (ref "C1"), XlError "#VALUE!" )
-            ]
+   runTest "OASIS 3.3 2.1.4) Note 6" [
+      addAF "A1" "B2" (lmtx [[1,2],[3,4],[5,6]]) (num 1),
+      addF "D1" (ref "B3") (XlEmpty)]
 
-         runTest "ISO/IEC 29500:1 2012 page 2040 ex.1" [
-            ( XlSetFormula (toRC "B2") (num 1), XlNumber 1),
-            ( XlSetFormula (toRC "B3") (num 2), XlNumber 2),
-            ( XlSetFormula (toRC "B4") (num 3), XlNumber 3),
-            ( XlSetFormula (toRC "C2") (num 4), XlNumber 4),
-            ( XlSetFormula (toRC "C3") (num 5), XlNumber 5),
-            ( XlSetFormula (toRC "C4") (num 6), XlNumber 6),
-            ( XlSetArrayFormula (toRC "D2") (toRC "D4") (XlFun "+" [XlFun "*" [range "B2" "B4", range "C2" "C4"], num 10.5]), XlNumber 14.5),
-            ( XlSetFormula (toRC "E2") (ref "D2"), XlNumber 14.5 ),
-            ( XlSetFormula (toRC "E3") (ref "D3"), XlNumber 20.5 ),
-            ( XlSetFormula (toRC "E4") (ref "D4"), XlNumber 28.5 )
-            ]
+   runTest "OASIS 3.3 2.2.1) Note 7" [
+      addF "A1" (lnum 10) (num 10),
+      addF "A2" (lnum 20) (num 20),
+      addF "B3" (fun "INDIRECT" [lmtxs [["A1", "A2"]]]) (num 10),
+      addAF "B4" "C4" (fun "INDIRECT" [lmtxs  [["A1", "A2"]]]) (num 10),
+      addF "B5" (fun "SUM" [fun "INDIRECT" [lmtxs [["A1", "A2"]]]]) (num 10),
+      addAF "B6" "B6" (fun "SUM" [fun "INDIRECT" [lmtxs [["A1", "A2"]]]]) (num 30),
+      addF "B7" (fun "SUM" [fun "SQRT" [range "A1" "A2"]]) (err "#VALUE!"),
+      addAF "B8" "B8" (fun "SUM" [fun "SQRT" [range "A1" "A2"]]) (sumSqrt [10,20]),
+      addF "C7" (fun "SQRT" [range "A1" "A2"]) (err "#VALUE!"),
+      addAF "C8" "C9" (fun "SQRT" [range "A1" "A2"]) (num (sqrt 10)),
+      addF "D3" (lmtx [[10, 20]]) (num 10),
+      addAF "D4" "E4" (lmtx [[10, 20]]) (num 10),
+      addF "D5" (fun "SUM" [lmtx [[10,20]]]) (num 30),
+      addAF "D6" "D6" (fun "SUM" [lmtx [[10,20]]]) (num 30),
+      addF "D7" (fun "SUM" [fun "SQRT" [lmtx [[10,20]]]]) (num (sqrt 10)),
+      addAF "D8" "D8" (fun "SUM" [fun "SQRT" [lmtx [[10,20]]]]) (sumSqrt [10,20]),
+      addF "E7" (fun "SQRT" [lmtx [[10,20]]]) (num (sqrt 10)),
+      addAF "E8" "E9" (fun "SQRT" [lmtx [[10],[20]]]) (num (sqrt 10))]
 
-         runTest "ISO/IEC 29500:1 2012 page 2040 exs.2 and 3" [
-            ( XlSetFormula (toRC "A1") (XlFun "SQRT" [nummtx [[1,2,3,4]]]), XlNumber 1 ),
-            ( XlSetArrayFormula (toRC "B1") (toRC "B1") (XlFun "SQRT" [nummtx [[1,2,3,4]]]), XlNumber 1 ),
-            ( XlSetArrayFormula (toRC "C1") (toRC "G1") (XlFun "SQRT" [nummtx [[1,2,3,4]]]), XlNumber 1 ),
-            ( XlSetFormula (toRC "C2") (ref "C1"), XlNumber (sqrt 1)),
-            ( XlSetFormula (toRC "D2") (ref "D1"), XlNumber (sqrt 2)),
-            ( XlSetFormula (toRC "E2") (ref "E1"), XlNumber (sqrt 3)),
-            ( XlSetFormula (toRC "F2") (ref "F1"), XlNumber (sqrt 4)),
-            ( XlSetFormula (toRC "G2") (ref "G1"), XlError "#N/A")
-            ]
+   runTest "OASIS 3.3 2.2.1) Note 8.1" [
+      addAF "A1" "C1" (fun "+" [lmtx [[1,2]], lmtx [[3,4,5]]]) (num 4),
+      addF "A2" (ref "A1") (num 4),
+      addF "B2" (ref "B1") (num 6),
+      addF "C2" (ref "C1") (err "#N/A")]
 
-         runTest "ISO/IEC 29500:1 2012 page 2040 ex.4 ***** consistent with LibreOffice, inconsistent with ISO doc" [
-            ( XlSetFormula      (toRC "A1")             (XlFun "SUM" [XlFun "SQRT" [nummtx [[1,2,3,4]]]]), XlNumber 1 ),
-            ( XlSetArrayFormula (toRC "A2") (toRC "A2") (XlFun "SUM" [XlFun "SQRT" [nummtx [[1,2,3,4]]]]), XlNumber ((sqrt 1)+(sqrt 2)+(sqrt 3)+(sqrt 4)) )
-            ]
+   runTest "OASIS 3.3 2.2.1) Note 8.2" [
+      addAF "A1" "B1" (fun "+" [lmtx [[1]], lmtx [[1,2]]]) (num 2),
+      addF "A2" (ref "A1") (num 2),
+      addF "B2" (ref "B1") (num 3)]
+   
+   runTest "OASIS 3.3 2.2.3.1) Note 9.1" [
+      addAF "A1" "C2" (fun "+" [lnum 1, lmtx [[1,2,3],[4,5,6]]]) (num 2),
+      addF "D1" (ref "A1") (num 2),
+      addF "E1" (ref "B1") (num 3),
+      addF "F1" (ref "C1") (num 4),
+      addF "D2" (ref "A2") (num 5),
+      addF "E2" (ref "B2") (num 6),
+      addF "F2" (ref "C2") (num 7)]
+   
+   runTest "OASIS 3.3 2.2.3.1) Note 9.2" [
+      addAF "A1" "C2" (fun "+" [lmtx [[1]], lmtx [[1,2,3],[4,5,6]]]) (num 2),
+      addF "D1" (ref "A1") (num 2),
+      addF "E1" (ref "B1") (num 3),
+      addF "F1" (ref "C1") (num 4),
+      addF "D2" (ref "A2") (num 5),
+      addF "E2" (ref "B2") (num 6),
+      addF "F2" (ref "C2") (num 7)]
 
-         runTest "more tests" [
-            ( XlSetFormula      (toRC "A1")             (XlFun "SUM" [XlFun "SQRT" [nummtx [[1,2,3,4]]]]), XlNumber 1 ),
-            ( XlSetArrayFormula (toRC "A2") (toRC "A2") (XlFun "SUM" [XlFun "SQRT" [nummtx [[1,2,3,4]]]]), XlNumber ((sqrt 1)+(sqrt 2)+(sqrt 3)+(sqrt 4)) ),
-            ( XlSetArrayFormula (toRC "B1") (toRC "E1") (XlFun "SUM" [XlFun "SQRT" [nummtx [[1,2,3,4]]]]), XlNumber ((sqrt 1)+(sqrt 2)+(sqrt 3)+(sqrt 4)) ),
-            ( XlSetArrayFormula (toRC "A3") (toRC "D3") (XlFun "SUM" [XlFun "+" [nummtx [[1,2,3,4]], num 100]]), XlNumber 410 )
-            ]
+   runTest "OASIS 3.3 2.2.3.1) Note 10" [
+      addAF "A1" "B2" (fun "+" [lmtx [[1],[2]], lmtx [[10,20],[30,40]]]) (num 11),
+      addF "D1" (ref "A1") (num 11),
+      addF "E1" (ref "B1") (num 21),
+      addF "D2" (ref "A2") (num 32),
+      addF "E2" (ref "B2") (num 42)]
 
-         runTest "more tests" [
-            ( XlSetFormula      (toRC "A1")             (num 1), XlNumber 1 ),
-            ( XlSetFormula      (toRC "A2")             (num 2), XlNumber 2 ),
-            ( XlSetFormula      (toRC "A3")             (num 3), XlNumber 3 ),
-            ( XlSetFormula      (toRC "A4")             (num 4), XlNumber 4 ),
-            ( XlSetFormula      (toRC "B5")             (XlFun "SUM" [XlFun "+" [range "A1" "A4", num 100]]), XlError "#VALUE!" ),
-            ( XlSetArrayFormula (toRC "B6") (toRC "B6") (XlFun "SUM" [XlFun "+" [range "A1" "A4", num 100]]), XlNumber 410 )
-            ]
-         
-         runTest "more tests" [
-            ( XlSetFormula      (toRC "A3") (str "F"), XlString "F" ),
-            ( XlSetFormula      (toRC "B3")             (XlFun "SUM" [XlFun "+" [nummtx [[1,2,3,4]], num 100]]), XlNumber 410 ),
-            ( XlSetFormula      (toRC "A4") (str "AF"), XlString "AF" ),
-            ( XlSetArrayFormula (toRC "B4") (toRC "B4") (XlFun "SUM" [XlFun "+" [nummtx [[1,2,3,4]], num 100]]), XlNumber 410 ),
-            ( XlSetFormula      (toRC "A5") (str "F"), XlString "F" ),
-            ( XlSetFormula      (toRC "B5")             (XlFun "SUM" [XlFun "+" [XlFun "ABS" [nummtx [[1,2,3,4]] ], num 100]]), XlNumber 101 ),
-            ( XlSetFormula      (toRC "A6") (str "AF"), XlString "AF" ),
-            ( XlSetArrayFormula (toRC "B6") (toRC "B6") (XlFun "SUM" [XlFun "+" [XlFun "ABS" [nummtx [[1,2,3,4]] ], num 100]]), XlNumber 410 )
-            ]
+   runTest "OASIS 3.3 2.2.3.1) Note 11" [
+      addAF "A1" "B2" (fun "+" [lmtx [[1,2]], lmtx [[10,20],[30,40]]]) (num 11),
+      addF "D1" (ref "A1") (num 11),
+      addF "E1" (ref "B1") (num 22),
+      addF "D2" (ref "A2") (num 31),
+      addF "E2" (ref "B2") (num 42)]
+   
+   runTest "OASIS 3.3 2.2.3.1) Note 12" [
+      addAF "A1" "B2" (fun "+" [lmtx [[1,2]], lmtx [[10],[20]]]) (num 11),
+      addF "D1" (ref "A1") (num 11),
+      addF "E1" (ref "B1") (num 12),
+      addF "D2" (ref "A2") (num 21),
+      addF "E2" (ref "B2") (num 22)]
 
-         runTest "Formula evaluation incompatibilities" [
-            ( XlSetFormula       (toRC "A1")                (num 10), XlNumber 10 ),
-            ( XlSetFormula       (toRC "A2")                (num 20), XlNumber 20 ),
-            ( XlSetFormula       (toRC "B1")                (num 20), XlNumber 20 ),
- 
-            ( XlSetFormula       (toRC "D3")                (XlFun "SUM" [XlFun "SQRT" [nummtx [[10,20]]]]), XlNumber (sqrt 10) ),
-            ( XlSetArrayFormula  (toRC "D4") (toRC "D4")    (XlFun "SUM" [XlFun "SQRT" [nummtx [[10,20]]]]), XlNumber (sqrt 10 + sqrt 20) ),
-            ( XlSetFormula       (toRC "D5")                (XlFun "SUM" [XlFun "SQRT" [range "A1" "A2"]]), XlError "#VALUE!" ),
-            ( XlSetArrayFormula  (toRC "D6") (toRC "D6")    (XlFun "SUM" [XlFun "SQRT" [range "A1" "A2"]]), XlNumber (sqrt 10 + sqrt 20) ),
-            ( XlSetFormula       (toRC "D7")                (XlFun "SUM" [XlFun "SQRT" [XlFun "INDIRECT" [XlLit (XlMatrix [[XlString "A1", XlString "A2"]])]]]), XlNumber (sqrt 10) ),
-            ( XlSetArrayFormula  (toRC "D8") (toRC "D8")    (XlFun "SUM" [XlFun "SQRT" [XlFun "INDIRECT" [XlLit (XlMatrix [[XlString "A1", XlString "A2"]])]]]), XlNumber (sqrt 10 + sqrt 20) ),
-            ( XlSetFormula       (toRC "D9")                (XlFun "SUM" [XlFun "INDIRECT" [XlLit (XlMatrix [[XlString "A1", XlString "A2"]])]]), XlNumber 10 ),
-            ( XlSetArrayFormula  (toRC "D10") (toRC "D10")  (XlFun "SUM" [XlFun "INDIRECT" [XlLit (XlMatrix [[XlString "A1", XlString "A2"]])]]), XlNumber 30 ),
-
-            ( XlSetFormula       (toRC "D11")               (XlFun "SQRT" [nummtx [[10,20]]]), XlNumber (sqrt 10) ),
-            ( XlSetArrayFormula  (toRC "D12") (toRC "E12")  (XlFun "SQRT" [nummtx [[10,20]]]), XlNumber (sqrt 10) ),
-            ( XlSetFormula       (toRC "D13")               (XlFun "SQRT" [range "A1" "B1"]), XlError "#VALUE!" ),
-            ( XlSetArrayFormula  (toRC "D14") (toRC "E14")  (XlFun "SQRT" [range "A1" "B1"]), XlNumber (sqrt 10) ),
-            ( XlSetFormula       (toRC "D15")               (XlFun "SQRT" [XlFun "INDIRECT" [XlLit (XlMatrix [[XlString "A1", XlString "B1"]])]]), XlNumber (sqrt 10) ),
-            ( XlSetArrayFormula  (toRC "D16") (toRC "E16")  (XlFun "SQRT" [XlFun "INDIRECT" [XlLit (XlMatrix [[XlString "A1", XlString "B1"]])]]), XlNumber (sqrt 10) ),
-            ( XlSetFormula       (toRC "D17")               (XlFun "INDIRECT" [XlLit (XlMatrix [[XlString "A1", XlString "B1"]])]), XlNumber 10 ),
-            ( XlSetArrayFormula  (toRC "D18") (toRC "E18")  (XlFun "INDIRECT" [XlLit (XlMatrix [[XlString "A1", XlString "B1"]])]), XlNumber 10 )]
+   runTest "OASIS 3.3 2.2.3.1) Note 13" [
+      addAF "A1" "C1" (fun "MID" [lstr "abcd", lmtx [[1,2]], lmtx [[1,2,3]]]) (str "a"),
+      addF "A2" (ref "A1") (str "a"),
+      addF "B2" (ref "B1") (str "bc"),
+      addF "C2" (ref "C1") (err "#VALUE!")]
+   
+   runTest "ISO/IEC 29500:1 2012 page 2040 ex.1" [
+      addF "B2" (lnum 1) (num 1),
+      addF "B3" (lnum 2) (num 2),
+      addF "B4" (lnum 3) (num 3),
+      addF "C2" (lnum 4) (num 4),
+      addF "C3" (lnum 5) (num 5),
+      addF "C4" (lnum 6) (num 6),
+      addAF "D2" "D4" (fun "+" [fun "*" [range "B2" "B4", range "C2" "C4"], lnum 10.5]) (num 14.5),
+      addF "E2" (ref "D2") (num 14.5),
+      addF "E3" (ref "D3") (num 20.5),
+      addF "E4" (ref "D4") (num 28.5)]
+   
+   runTest "ISO/IEC 29500:1 2012 page 2040 exs.2 and 3" [
+      addF "A1" (fun "SQRT" [lmtx [[1,2,3,4]]]) (num 1),
+      addAF "B1" "B1" (fun "SQRT" [lmtx [[1,2,3,4]]]) (num 1),
+      addAF "C1" "G1" (fun "SQRT" [lmtx [[1,2,3,4]]]) (num 1),
+      addF "C2" (ref "C1") (num (sqrt 1)),
+      addF "D2" (ref "D1") (num (sqrt 2)),
+      addF "E2" (ref "E1") (num (sqrt 3)),
+      addF "F2" (ref "F1") (num (sqrt 4)),
+      addF "G2" (ref "G1") (err "#N/A")]
+   
+   -- These results are consistent with LibreOffice, but not with the ISO document:
+   runTest "ISO/IEC 29500:1 2012 page 2040 ex.4" [
+      addF "A1" (fun "SUM" [fun "SQRT" [lmtx [[1,2,3,4]]]]) (num 1),
+      addAF "A2" "A2" (fun "SUM" [fun "SQRT" [lmtx [[1,2,3,4]]]]) (sumSqrt [1,2,3,4])]
+   
+   runTest "more tests with array formulas" [
+      addF "A1" (fun "SUM" [fun "SQRT" [lmtx [[1,2,3,4]]]]) (num 1),
+      addAF "A2" "A2" (fun "SUM" [fun "SQRT" [lmtx [[1,2,3,4]]]]) (sumSqrt [1,2,3,4]),
+      addAF "B1" "E1" (fun "SUM" [fun "SQRT" [lmtx [[1,2,3,4]]]]) (sumSqrt [1,2,3,4]),
+      addAF "A3" "D3" (fun "SUM" [fun "+" [lmtx [[1,2,3,4]], lnum 100]]) (num 410)]
+   
+   runTest "A test with an array formula and a range" [
+      addF "A1" (lnum 1) (num 1),
+      addF "A2" (lnum 2) (num 2),
+      addF "A3" (lnum 3) (num 3),
+      addF "A4" (lnum 4) (num 4),
+      addF "B5" (fun "SUM" [fun "+" [range "A1" "A4", lnum 100]]) (err "#VALUE!"),
+      addAF "B6" "B6" (fun "SUM" [fun "+" [range "A1" "A4", lnum 100]]) (num 410)]
+   
+   -- These are not fully compatible with LibreOffice:
+   runTest "Array formulas and nested functions" [
+      addF "A3" (lstr "F") (str "F"),
+      addF "B3" (fun "SUM" [fun "+" [lmtx [[1,2,3,4]], lnum 100]]) (num 101),
+      addF "A4" (lstr "AF") (str "AF"),
+      addAF "B4" "B4" (fun "SUM" [fun "+" [lmtx [[1,2,3,4]], lnum 100]]) (num 410),
+      addF "A5" (lstr "F") (str "F"),
+      addF "B5" (fun "SUM" [fun "+" [fun "ABS" [lmtx [[1,2,3,4]] ], lnum 100]]) (num 101),
+      addF "A6" (lstr "AF") (str "AF"),
+      addAF "B6" "B6" (fun "SUM" [fun "+" [fun "ABS" [lmtx [[1,2,3,4]] ], lnum 100]]) (num 101)]
+   
+   -- In the following test, all match LibreOffice except @D8@:
+   runTest "Formula evaluation incompatibilities" [
+      addF "A1" (lnum 10) (num 10),
+      addF "A2" (lnum 20) (num 20),
+      addF "B1" (lnum 20) (num 20),
+      
+      addF "D3" (fun "SUM" [fun "SQRT" [lmtx [[10,20]]]]) (num (sqrt 10)),
+      addAF "D4" "D4" (fun "SUM" [fun "SQRT" [lmtx [[10,20]]]]) (sumSqrt [10,20]),
+      addF "D5" (fun "SUM" [fun "SQRT" [range "A1" "A2"]]) (err "#VALUE!"),
+      addAF "D6" "D6" (fun "SUM" [fun "SQRT" [range "A1" "A2"]]) (sumSqrt [10,20]),
+      addF "D7" (fun "SUM" [fun "SQRT" [fun "INDIRECT" [lmtxs [["A1", "A2"]]]]]) (num (sqrt 10)),
+      addAF "D8" "D8" (fun "SUM" [fun "SQRT" [fun "INDIRECT" [lmtxs [["A1", "A2"]]]]]) (num (sqrt 10)),
+      addF "D9" (fun "SUM" [fun "INDIRECT" [lmtxs [["A1", "A2"]]]]) (num 10),
+      addAF "D10" "D10" (fun "SUM" [fun "INDIRECT" [lmtxs [["A1", "A2"]]]]) (num 30),
+      
+      addF "D11" (fun "SQRT" [lmtx [[10,20]]]) (num (sqrt 10)),
+      addAF "D12" "E12" (fun "SQRT" [lmtx [[10,20]]]) (num (sqrt 10)),
+      addF "D13" (fun "SQRT" [range "A1" "B1"]) (err "#VALUE!"),
+      addAF "D14" "E14" (fun "SQRT" [range "A1" "B1"]) (num (sqrt 10)),
+      addF "D15" (fun "SQRT" [fun "INDIRECT" [lmtxs [["A1", "B1"]]]]) (num (sqrt 10)),
+      addAF "D16" "E16" (fun "SQRT" [fun "INDIRECT" [lmtxs [["A1", "B1"]]]]) (num (sqrt 10)),
+      addF "D17" (fun "INDIRECT" [lmtxs [["A1", "B1"]]]) (num 10),
+      addAF "D18" "E18" (fun "INDIRECT" [lmtxs [["A1", "B1"]]]) (num 10)]
+   
+   runTest "Circular references" [
+      addF "B1" (lnum 100) (err "#LOOP!"),
+      addF "A1" (ref "B1") (err "#LOOP!"),
+      addF "B1" (ref "A1") (err "#LOOP!")]
 
 \end{code}
-
-
-
-%\begin{code}
-%
-%main :: IO ()
-%main = 
-%      do
-%
-%         runTest "Circular references" [
-%            ( XlSetFormula      (toRC "B1")             (num 100),  XlError "#LOOP!" ),
-%            ( XlSetFormula      (toRC "A1")             (ref "B1"), XlError "#LOOP!" ),
-%            ( XlSetFormula      (toRC "B1")             (ref "A1"), XlError "#LOOP!" )]
-%
-%\end{code}
-
 
 \end{document}
