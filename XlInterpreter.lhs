@@ -1,8 +1,10 @@
 \documentclass[a4paper]{article}
 %\setlength{\parskip}{\baselineskip}
 \usepackage[margin=3cm]{geometry}
+%BEGIN LYX PREAMBLE
 %include polycode.fmt
 %include Xl_format.lhs
+%END LYX PREAMBLE
 
 \begin{document}
 
@@ -10,6 +12,7 @@
 \author{Hisham Muhammad}
 
 \maketitle{}
+%BEGIN LYX TEXT
 
 This is an interpreter designed to model the core semantics of spreadsheets,
 with a focus on the dataflow language at its core. Our intention here is to
@@ -1071,4 +1074,5 @@ OpenDocument specification for the @.ods@ format [***reference***] and the ISO
 Open Office XML specification for the @.xlsx@ format [***reference***], as
 well as our own additional tests that cover some unspecified behavior.
 
+%END LYX TEXT
 \end{document}
