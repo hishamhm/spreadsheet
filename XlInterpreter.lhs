@@ -12,7 +12,6 @@
 \author{Hisham Muhammad}
 
 \maketitle{}
-%BEGIN LYX TEXT
 
 This is an interpreter designed to model the core semantics of spreadsheets,
 with a focus on the dataflow language at its core. Our intention here is to
@@ -26,17 +25,14 @@ described in our work.
 We chose to model most closely the semantics of LibreOffice, which is the
 spreadsheet for which the most detailed specification documents are available.
 
-The remainder of this chapter\footnote{[*** N.E. This text was written with
-the intention of embedding into the ``Case study: spreadsheets'' chapter of the
-thesis -- placeholders for fragments that will need to be changed upon merge
-are marked the same way as this footnote. ***]} was written in Literate
-Haskell, and is a description of the entire interpreter, including its
-complete listings. The text was written so that it should be understandable
-without a detailed reading of the source code, but the sources are
-nevertheless included for completeness and as supporting material for the
-interested reader. The source code in @.lhs@ format (\LaTeX~with embedded
-Haskell) is also available at [***URL***].
+This section was written in Literate Haskell, and is a description of the
+entire interpreter, including its complete listings. The text was written so
+that it should be understandable without a detailed reading of the source
+code, but the sources are nevertheless included for completeness and as
+supporting material for the interested reader. The source code in @.lhs@
+format (\LaTeX~with embedded Haskell) is also available at \url{https://hisham.hm/thesis/}.
 
+%BEGIN LYX TEXT
 
 This implementation uses only standard modules included in the Haskell Platform:
 
@@ -87,13 +83,10 @@ data XlAddr  =  XlAbs  Int  -- (absolute address)
 
 \end{code}
 
-Cells contain formulas. As explained in Section [*** ``Array formulas'', earlier
-in the chapter***], formulas can be evaluated in a special mode called ``array
-formula''.\footnote{[*** To add earlier in the chapter: In spite of this name,
-the indication if the formula will be evaluated as an array formula is a
-property of the cell, not the formula. [*** Note that Google Sheets breaks
-compatibility and does this differently. ***] ***]} In this interpreter, this
-is indicated by constructing a cell as a |XlCell| or |XlAFCell|.
+Cells contain formulas. As explained in Section \ref{sub:Array-formulas},
+formulas can be evaluated in a special mode called ``array formula''. The
+indication if the formula will be evaluated as an array formula is a property
+of the cell, not the formula.
 
 In the spreadsheet interface, a single array formula is presented as covering
 a range of cells. In our interpreter, we replicate the formula in each cell of
@@ -222,7 +215,7 @@ cell formulas) and a list of events. For each event, it calls the main
 evaluation function, |runEvent|, until it produces the final state, containing
 the resulting cells and their values.
 
-Unlike the interpreter modelling Pure Data in Chapter [*** Pure Data ***], we
+Unlike the interpreter modelling Pure Data in Chapter \ref{chap:Pure-Data}, we
 return only the final state, since inspecting the final result of the
 spreadsheet is usually sufficient for understanding its behavior. Tracing the
 intermediate results is an easy modification if desired.
@@ -369,7 +362,7 @@ toAbsRange pos rcFrom rcTo =
       (minR, minC, maxR, maxC)
 \end{code}
 
-\section{Calculating cells}
+\section{Calculating cell values}
 \label{calccell}
 
 To determine the value of a cell, the interpreter evaluates the cell's
@@ -397,14 +390,14 @@ and some evaluate arguments in an array context. This gives us four evaluation
 rules in total.
 
 This is the core of the incompatibility between spreadsheet formula languages.
-As our examples [***earlier in the thesis***] demonstrate, each application uses
-a different set of rules as to when to switch to array evaluation, and to what
-to do in each evaluation mode.
+As our examples in Section~\ref{sub:Array-formulas} demonstrate, each
+application uses a different set of rules as to when to switch to array
+evaluation, and to what to do in each evaluation mode.
 
 Note that the presence of different evaluation rules affects not only array
-formulas. As illustrated in [***Figure***], Excel performs array-style
-evaluation in sub-formulas for certain functions even when not in array
-formula mode.
+formulas. As illustrated in Figure~\ref{fig:Formula-evaluation-incompatibilities},
+Excel performs array-style evaluation in sub-formulas for certain functions
+even when not in array formula mode.
 
 In our implementation, we modularized these decisions into a number of
 functions implementing different ways of evaluating a formula, in array and
@@ -940,8 +933,8 @@ evalFormula ev vs (XlFun "/" [a, b]) =
 The equality operator is notable in which is does not perform number and
 string coercions as the other functions (that is, @=2="2"@ returns @FALSE@).
 However, it does coerce booleans to numbers, probably as a compatibility
-leftover from when spreadsheets did not have a separate boolean type.
-The OpenDocument specification [***reference***] states that a conforming
+leftover from when spreadsheets did not have a separate boolean type. The
+OpenDocument specification \cite{OASIS2011ODFFormula} states that a conforming
 implementation may represent booleans as a subtype of numbers.
 
 \begin{code}
@@ -1065,14 +1058,6 @@ checkErr op e@(XlError _)  _              = e
 checkErr op _              e@(XlError _)  = e
 checkErr op a              b              = op a b
 \end{code}
-
-\section{Demonstration}
-
-In Appendix [***appendix***] we present a demonstration of use of this
-interpreter, showcasing a series of tests that correspond to sections of the
-OpenDocument specification for the @.ods@ format [***reference***] and the ISO
-Open Office XML specification for the @.xlsx@ format [***reference***], as
-well as our own additional tests that cover some unspecified behavior.
 
 %END LYX TEXT
 \end{document}
