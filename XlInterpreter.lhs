@@ -43,9 +43,10 @@ module XlInterpreter where
 import Data.Char (ord, chr, toUpper)
 import Data.Fixed
 import Data.List (foldl')
-import Data.Map.Strict as Map (Map, foldlWithKey, member, insert, empty, lookup)
-import Data.Set as Set (Set, insert, member, singleton)
-import Debug.Trace
+import Data.Map.Strict as Map (Map, foldlWithKey, member, empty, lookup)
+import Data.Set as Set (Set, member, singleton)
+import Data.Map.Strict (insert)
+import qualified Data.Set as Set (insert)
 
 \end{code}
 
@@ -256,7 +257,7 @@ runEvent env@(XlState cells _) event =
          then vs
          else
             let (v', vs') = calcCell (Set.singleton rc) cells' vs rc cell
-            in Map.insert rc v' vs' 
+            in insert rc v' vs' 
    in
       XlState cells' (Map.foldlWithKey acc Map.empty cells')
 \end{code}
@@ -266,13 +267,13 @@ at a time in case of an array formula applied over a range. Function
 |updateCells| covers both cases:
 
 \begin{code}
-updateCells cells event@(XlSetFormula rc formula) =
-   Map.insert rc (XlCell formula) cells
+updateCells cells event@(XlSetFormula rc fml) =
+   insert rc (XlCell fml) cells
 
-updateCells cells event@(XlSetArrayFormula rcFrom rcTo formula) =
+updateCells cells event@(XlSetArrayFormula rcFrom rcTo fml) =
    fst $ foldRange rcFrom rcFrom rcTo (cells, (0, 0)) id cellOp rowOp
       where
-         cellOp (cells, (x, y)) rc  = (Map.insert rc (XlAFCell formula (x, y)) cells, (x + 1, y))
+         cellOp (cells, (x, y)) rc  = (insert rc (XlAFCell fml (x, y)) cells, (x + 1, y))
          rowOp _ r (cells, (x, y))  = (cells, (0, y + 1))
 \end{code}
 
@@ -284,8 +285,8 @@ which runs on each cell, and one that runs as each row is completed.
 foldRange ::  XlRC -> XlRC -> XlRC     -- cell position and addresses for the range
               -> r                     -- a zero-value for the fold as a whole
               -> (r -> c)              -- an initializer function for each row
-              -> (c -> XlRC -> c)      -- accumulator function to run on each cell
-              -> (r -> Int -> c -> r)  -- accumulator function to run on each complete row
+              -> (c -> XlRC -> c)      -- function to run on each cell
+              -> (r -> Int -> c -> r)  -- function to run on each complete row
               -> r
 foldRange pos rcFrom rcTo zero zeroRow cellOp rowOp =
    let
@@ -567,8 +568,8 @@ offset $(1, 0)$ and will obtain the value of cell @B1@.
 The area designated by the user for an array formula does not necessarily have
 the same dimensions as the non-scalar being displayed in it. The OpenDocument
 specification lists a series of rules for filling the exceeding cells, which
-the |displayRule| function below implements. Excel and LibreOffice implement
-these rules; Google Sheets does not.
+the |displayRule| function below implements. Excel and LibreOffice also
+implement these rules; Google Sheets does not.
 
 \begin{code} 
 
@@ -585,7 +586,8 @@ matrixToScalar pos (x, y) f =
                (fromR, fromC, toR, toC) = toAbsRange pos rcFrom rcTo
       f -> f
    where
-      displayRule :: Int -> Int -> Int -> Int -> (Int -> Int -> XlFormula) -> XlFormula
+      displayRule ::  Int -> Int -> Int -> Int -> (Int -> Int -> XlFormula)
+                      -> XlFormula
       displayRule x y sizeX sizeY getXY 
          | sizeX > x   &&  sizeY > y   = getXY x y
          | sizeX == 1  &&  sizeY == 1  = getXY 0 0
@@ -690,11 +692,10 @@ evalFormula ev vs (XlRef ref') =
             case Map.lookup ref (eCells ev) of
             Nothing    -> (XlEmpty, vs)
             Just cell  -> 
-               let
+               (v', vs'')
+               where
                   (v', vs') = calcCell (Set.insert ref (eVisiting ev)) (eCells ev) vs ref cell
-                  vs'' = Map.insert ref v' vs'
-               in
-                  (v', vs'')
+                  vs'' = insert ref v' vs'
 \end{code}
 
 For evaluating ranges, |evalFormula| uses |foldRange| to iterate over the
@@ -714,7 +715,8 @@ evalFormula ev vs (XlRng from to) =
                addToRow $ (eScalar ev) ev vs (XlRef rc)
                   where addToRow (v, vs') = (row ++ [v], vs')
    
-            rowOp :: ([[XlValue]], XlValues) -> Int -> ([XlValue], XlValues) -> ([[XlValue]], XlValues)
+            rowOp ::  ([[XlValue]], XlValues) -> Int -> ([XlValue], XlValues)
+                      -> ([[XlValue]], XlValues)
             rowOp (m, _) r (row, vs) = (m ++ [row], vs)
    in
       (XlMatrix m, vs')
@@ -976,8 +978,8 @@ unOp op ev vs v =
    in
       (v'', vs')
 
-binOp ::  (Double -> Double -> Double)
-          -> XlEvaluator -> XlValues -> XlFormula -> XlFormula -> (XlValue, XlValues)
+binOp ::  (Double -> Double -> Double) -> XlEvaluator -> XlValues
+          -> XlFormula -> XlFormula -> (XlValue, XlValues)
 binOp op ev vs a b =
    let
       (va, vs')   = toNumber $ (eScalar ev) ev vs  a
