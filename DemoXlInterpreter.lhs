@@ -13,46 +13,27 @@
 
 \section{Introduction}
 
+
 We present here a demonstration of the spreadsheet interpreter in use. This
 appendix is a Literate Haskell program including the complete source code of
 the demonstration.
-
-This demonstration presents a series of tests, many of which correspond to
-sections of the OpenDocument specification for the @.ods@ format
-[***reference***] and the ISO Open Office XML specification for the @.xlsx@
-format [***reference***], as well as our own additional tests that cover some
-unspecified behavior.
-
-Finally, we run the tests. As an illustration of the execution, the first
-example below produces the following output:
-
-\begin{footnotesize}\begin{verbatim}
-Values:
-  |A        |B        |C        |D        |E        |F        |G        |H        |I        |J        
- 1|       15|       15|"B"      |       75|       30|      105|     1015|       10|      -20|       30
- 2|       30|       15|        1|         |         |         |         |         |       20|         
- 3|         |         |         |         |         |         |         |         |         |         
- 4|         |         |         |         |         |         |         |         |         |         
- 5|         |         |"#VALUE!"|      115|         |       15|         |         |         |         
- 6|         |         |         |      130|         |       16|         |         |         |         
- 7|         |         |         |         |         |         |         |         |         |         
- 8|         |         |         |         |         |         |"#VALUE!"|         |         |         
- 9|         |         |         |         |         |         |         |         |         |         
-10|       10|         |         |         |         |         |         |         |         |         
-11|"10"     |         |         |         |         |         |         |         |         |         
-12|False    |         |         |         |         |         |         |         |         |         
-13|True     |         |         |         |         |         |         |         |         |         
-14|True     |         |         |         |         |         |         |         |         |         
-15|"#DIV/0!"|         |         |         |         |         |         |         |         |         
-16|"#VALUE!"|         |         |         |         |         |         |         |         |         
-17|"#DIV/0!"|         |         |         |         |         |         |         |         |         
-\end{verbatim}\end{footnotesize}
 
 This program imports the interpreter defined in Chapter [*** number ***] as a
 module, as well as some standard modules from the Haskell Platform. We also
 use one additional module for tabular pretty-printing of the output:
 |Text.PrettyPrint.Boxes|, available from Hackage, the Haskell community's
-package repository [*** reference/link ***].
+package repository\footnote{\url{https://hackage.haskell.org/package/boxes}}.
+
+This demonstration showcases presents a series of tests, many of which correspond to
+sections of the OpenDocument specification for the @.ods@
+format~\cite{ISO29500_OfficeOpenXML} and the ISO Open Office XML specification
+for the @.xlsx@ format~\cite{OASIS2011ODFFormula}, as well as our own
+additional tests that cover some unspecified behavior.
+
+Finally, we run the tests. As an illustration of the execution, the first
+example below produces the following output:
+
+%BEGIN LYX DEMO
 
 \begin{code}
 
@@ -64,6 +45,27 @@ import Text.PrettyPrint.Boxes as Alignment (left, right)
 
 \end{code}
 
+Running the program produces the following output:
+
+\begin{footnotesize}\begin{verbatim}
+  |A        |B        |C        |D        |E        |F        |G        
+ 1|       15|       15|"B"      |       75|       30|      105|     1015
+ 2|       30|       15|        1|         |         |         |         
+ 3|         |         |         |         |         |         |         
+ 4|         |         |         |         |         |         |         
+ 5|         |         |"#VALUE!"|      115|         |       15|         
+ 6|         |         |         |      130|         |       16|         
+ 7|         |         |         |         |         |         |         
+ 8|         |         |         |         |         |         |"#VALUE!"
+ 9|         |         |         |         |         |         |         
+10|       10|         |         |       10|      -20|       30|         
+11|"10"     |         |         |         |       20|         |         
+12|False    |"#DIV/0!"|         |         |         |         |         
+13|True     |"#VALUE!"|         |         |         |         |         
+14|True     |"#DIV/0!"|         |         |         |         |         
+\end{verbatim}\end{footnotesize}
+
+
 \section{Formatting}
 
 In order to produce a more readable output, we define the instance |Show| for
@@ -74,28 +76,30 @@ outputs.
 
 instance Show XlState where
    show (XlState cells values) = 
-      "\nCells:\n" ++ listCells ++ "\nValues:\n" ++ tableValues ++ "\n" ++ show values ++ "\n"
-         where
-            maxRow       =  Map.foldlWithKey (\mx (XlRC (XlAbs r) _) _ -> max r mx) 0 values
-            maxCol       =  Map.foldlWithKey (\mx (XlRC _ (XlAbs c)) _ -> max c mx) 0 values
-            listCells    =  Box.render
-                            $ Box.vcat Alignment.left 
-                            $ map Box.text 
-                            $ map show (Map.toList cells)
-            tableValues  =  Box.render
-                            $ Box.hcat Alignment.left 
-                            $ numsCol : map doCol [0..maxCol]
-            numsCol      =  Box.vcat Alignment.right
-                            $ map Box.text
-                            $ " " : map show [1..(maxRow + 1)]
-            doCol c      =  Box.vcat Alignment.left
-                            $ Box.text ['|', chr (c + 65)] : 
-                              map (\s -> Box.text ('|' : doRow s c)) [0..maxRow]
-            lpad m xs    =  reverse $ take m $ reverse $ (take m $ repeat ' ') ++ (take m xs)
-            doRow r c    =  case Map.lookup ((XlRC (XlAbs r) (XlAbs c))) values of
-                            Just (XlNumber n)  -> lpad 9 (num2str n)
-                            Just v             -> show v
-                            Nothing            -> ""
+      "\nCells:\n" ++ listCells ++
+      "\nValues:\n" ++ tableValues ++
+      "\n" ++ show values ++ "\n"
+      where
+         maxRow       =  Map.foldlWithKey (\mx (XlRC (XlAbs r) _) _ -> max r mx) 0 values
+         maxCol       =  Map.foldlWithKey (\mx (XlRC _ (XlAbs c)) _ -> max c mx) 0 values
+         listCells    =  Box.render
+                         $ Box.vcat Alignment.left 
+                         $ map Box.text 
+                         $ map show (Map.toList cells)
+         tableValues  =  Box.render
+                         $ Box.hcat Alignment.left 
+                         $ numsCol : map doCol [0..maxCol]
+         numsCol      =  Box.vcat Alignment.right
+                         $ map Box.text
+                         $ " " : map show [1..(maxRow + 1)]
+         doCol c      =  Box.vcat Alignment.left
+                         $ Box.text ['|', chr (c + 65)] : 
+                           map (\s -> Box.text ('|' : doRow s c)) [0..maxRow]
+         lpad m xs    =  reverse $ take m $ reverse $ (take m $ repeat ' ') ++ (take m xs)
+         doRow r c    =  case Map.lookup ((XlRC (XlAbs r) (XlAbs c))) values of
+                         Just (XlNumber n)  -> lpad 9 (num2str n)
+                         Just v             -> show v
+                         Nothing            -> ""
 
 \end{code}
 
@@ -108,7 +112,8 @@ their results to expected values.
 runTest :: String -> [(XlEvent, XlValue)] -> IO ()
 runTest name operations =
    let
-      env@(XlState cells values) = runEvents (XlWorksheet Map.empty) (map fst operations)
+      env@(XlState cells values) = runEvents  (XlWorksheet Map.empty)
+                                              (map fst operations)
       value :: String -> XlValue
       value a1 = values ! (toRC a1)
    
@@ -136,7 +141,7 @@ runTest name operations =
             print failures
 \end{code}
 
-We employ a few shortcuts to write down formulas more tersely on paper:
+We employ a few shortcuts to write down formulas more tersely:
 
 \begin{code}
 str s = XlString s
@@ -156,13 +161,12 @@ addAF rcFrom rcTo f v = (XlSetArrayFormula (toRC rcFrom) (toRC rcTo) f, v)
 sumSqrt l = num $ foldr (+) 0 (map sqrt l)
 \end{code}
 
-Each invocation of |runTest| below is a new spreadsheet, where |addF| and
-|addAF| are events adding formulas and array formulas to cells. The last
-argument is the expected value. All tests here produce the indicated values.
+\section{The example spreadsheet}
 
-This batch of tests aims to document the specific behavior of the interpreter
-written in Chapter [*** number ***] and also serves as a list of corner cases
-which expose incompatibilities between real-world spreadsheet applications.
+We then run the main program, using |runTest| to create a spreadsheet, taking
+a list of input events as a parameter. In this list, |addF| and |addAF| are
+events adding formulas and array formulas to cells. The last argument is the
+expected value. All tests here produce the indicated values.
 
 \begin{code}
 
@@ -181,11 +185,11 @@ main =
       addF "E1" (fun "SUM" [range "B1" "B2"]) (num 30),
       addF "F1" (fun "SUM" [range "D1" "E1"]) (num 105),
       
-      addF "H1" (lnum 10) (num 10),
-      addF "I1" (lnum (-20)) (num (-20)),
-      addF "J1" (lnum 30) (num 30),
-      addF "I2" (fun "ABS" [range "H1" "J1"]) (num 20),
-      addF "G8" (fun "ABS" [range "H1" "J1"]) (err "#VALUE!"),
+      addF "D10" (lnum 10) (num 10),
+      addF "E10" (lnum (-20)) (num (-20)),
+      addF "F10" (lnum 30) (num 30),
+      addF "E11" (fun "ABS" [range "D10" "F10"]) (num 20),
+      addF "G8" (fun "ABS" [range "D10" "F10"]) (err "#VALUE!"),
       
       addF "A10" (lnum 10) (num 10),
       addF "A11" (lstr "10") (str "10"),
@@ -193,15 +197,26 @@ main =
       addF "A13" (fun "=" [ref "A10", lnum 10]) (boo True),
       addF "A14" (fun "=" [ref "A13", lnum 1]) (boo True),
       
-      addF "A15" (fun "/" [lnum 1, lnum 0]) (err "#DIV/0!"),
-      addF "A16" (fun "=" [ref "G8", ref "A15"]) (err "#VALUE!"),
-      addF "A17" (fun "=" [ref "A15", ref "G8"]) (err "#DIV/0!"),
+      addF "B12" (fun "/" [lnum 1, lnum 0]) (err "#DIV/0!"),
+      addF "B13" (fun "=" [ref "G8", ref "B12"]) (err "#VALUE!"),
+      addF "B14" (fun "=" [ref "B12", ref "G8"]) (err "#DIV/0!"),
       
       addF "G1" (fun "+" [lnum 1000, range "A1" "A2"]) (num 1015),
       
       addF "C5" (range "A1" "A2") (err "#VALUE!"),
       addAF "F5" "F6" (lmtx [[15], [16]]) (num 15),
       addAF "D5" "D6" (fun "+" [range "A1" "A2", lnum 100]) (num 115)]
+
+\end{code}
+
+In \url{http://hisham.hm/thesis} one can find a number of tests using this
+test driver. These tests document the specific behavior of the interpreter and
+also serve as a list of corner cases which expose incompatibilities between
+real-world spreadsheet applications.
+
+%END LYX DEMO
+
+\begin{code}
 
    runTest "OASIS 3.3 1.1) Note 1" [
       addF "A1" (fun "ABS" [lmtx [[-3, -4]]]) (num 3),
