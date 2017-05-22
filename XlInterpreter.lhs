@@ -219,8 +219,9 @@ the resulting cells and their values.
 
 Unlike the interpreter modelling Pure Data in Chapter \ref{chap:Pure-Data}, we
 return only the final state, since inspecting the final result of the
-spreadsheet is usually sufficient for understanding its behavior. Tracing the
-intermediate results is an easy modification if desired.
+spreadsheet is usually sufficient for understanding its behavior (and cell
+evaluation has loop detection, so a final state is guaranteed to be obtained).
+Tracing the intermediate results is an easy modification if desired.
 
 \begin{code}
 runEvents :: XlWorksheet -> [XlEvent] -> XlState
