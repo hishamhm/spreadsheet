@@ -146,7 +146,8 @@ coordinates using strings such as @B5@. In spreadsheets, such an identifier
 actually represents a relative coordinate, with @$B$5@ being the absolute
 equivalent. The @A1@ notation hides the fact that coordinates in spreadsheets
 are relative by default (which explains their behavior when copying and
-pasting cells).}
+pasting cells). Note, however, that this is a simplification in presentation
+only; the interpreter itself supports both relative and absolute addresses.}
 
 \begin{code}
 instance Show XlRC where
