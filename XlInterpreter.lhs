@@ -146,7 +146,8 @@ coordinates using strings such as @B5@. In spreadsheets, such an identifier
 actually represents a relative coordinate, with @$B$5@ being the absolute
 equivalent. The @A1@ notation hides the fact that coordinates in spreadsheets
 are relative by default (which explains their behavior when copying and
-pasting cells).}
+pasting cells). Note, however, that this is a simplification in presentation
+only; the interpreter itself supports both relative and absolute addresses.}
 
 \begin{code}
 instance Show XlRC where
@@ -218,8 +219,9 @@ the resulting cells and their values.
 
 Unlike the interpreter modelling Pure Data in Chapter \ref{chap:Pure-Data}, we
 return only the final state, since inspecting the final result of the
-spreadsheet is usually sufficient for understanding its behavior. Tracing the
-intermediate results is an easy modification if desired.
+spreadsheet is usually sufficient for understanding its behavior (and cell
+evaluation has loop detection, so a final state is guaranteed to be obtained).
+Tracing the intermediate results is an easy modification if desired.
 
 \begin{code}
 runEvents :: XlWorksheet -> [XlEvent] -> XlState
