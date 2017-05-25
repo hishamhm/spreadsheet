@@ -84,7 +84,7 @@ data XlAddr  =  XlAbs  Int  -- (absolute address)
 
 \end{code}
 
-Cells contain formulas. As explained in Section \ref{sub:Array-formulas},
+Cells contain formulas. As explained in Section \ref{subsec:Array-formulas},
 formulas can be evaluated in a special mode called ``array formula''. The
 indication if the formula will be evaluated as an array formula is a property
 of the cell, not the formula.
@@ -377,7 +377,8 @@ way.
 
 \begin{code}
 
-calcCell :: Set XlRC -> XlCells -> XlValues -> XlRC -> XlCell -> (XlValue, XlValues)
+calcCell ::  Set XlRC -> XlCells -> XlValues -> XlRC -> XlCell
+             -> (XlValue, XlValues)
 
 \end{code}
 
@@ -391,7 +392,7 @@ and some evaluate arguments in an array context. This gives us four evaluation
 rules in total.
 
 This is the core of the incompatibility between spreadsheet formula languages.
-As our examples in Section~\ref{sub:Array-formulas} demonstrate, each
+As our examples in Section~\ref{subsec:Array-formulas} demonstrate, each
 application uses a different set of rules as to when to switch to array
 evaluation, and to what to do in each evaluation mode.
 
@@ -682,20 +683,22 @@ an updated map of values.
 evalFormula ev vs (XlRef ref') =
    let
       ref = toAbs (ePos ev) ref'
+      visiting = eVisiting ev
+      cells = eCells ev
    in
-      if ref `Set.member` (eVisiting ev)
+      if ref `Set.member` visiting
       then (XlError "#LOOP!", vs)
       else 
          case Map.lookup ref vs of
          Just v   -> (v, vs)
          Nothing  ->
-            case Map.lookup ref (eCells ev) of
+            case Map.lookup ref cells of
             Nothing    -> (XlEmpty, vs)
             Just cell  -> 
                (v', vs'')
                where
-                  (v', vs') = calcCell (Set.insert ref (eVisiting ev)) (eCells ev) vs ref cell
-                  vs'' = insert ref v' vs'
+                  (v', vs')  = calcCell (Set.insert ref visiting) cells vs ref cell
+                  vs''       = insert ref v' vs'
 \end{code}
 
 For evaluating ranges, |evalFormula| uses |foldRange| to iterate over the
