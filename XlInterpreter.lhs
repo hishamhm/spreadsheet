@@ -103,7 +103,7 @@ data XlCell  =  XlCell    XlFormula
 
 \end{code}
 
-A formula, on its turn, may be a literal value, a reference to another cell, a
+A formula, in its turn, may be a literal value, a reference to another cell, a
 reference to a range of cells, or a function, which has a name and a list of
 arguments. Our interpreter, thus, manipulates expressions as trees of |XlFun|
 nodes, assuming that the textual formula language has already been parsed into
