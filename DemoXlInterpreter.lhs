@@ -95,7 +95,8 @@ instance Show XlState where
          doCol c      =  Box.vcat Alignment.left
                          $ Box.text ['|', chr (c + 65)] : 
                            map (\s -> Box.text ('|' : doRow s c)) [0..maxRow]
-         lpad m xs    =  reverse $ take m $ reverse $ (take m $ repeat ' ') ++ (take m xs)
+         lpad m xs    =  reverse  $ take m $ reverse 
+                                  $ (take m $ repeat ' ') ++ (take m xs)
          doRow r c    =  case Map.lookup ((XlRC (XlAbs r) (XlAbs c))) values of
                          Just (XlNumber n)  -> lpad 9 (num2str n)
                          Just v             -> show v
